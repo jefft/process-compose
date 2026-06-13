@@ -1,0 +1,16 @@
+version: "0.5"
+processes:
+  noisy:
+    command: "for i in $(seq 1 100000); do echo line $i; done; touch /tmp/noisy-done; echo ===STARTUP COMPLETE===; sleep 3600"
+    is_interactive: true
+    readiness_probe:
+      exec:
+        command: "test -f /tmp/noisy-done"
+      initial_delay_seconds: 2
+      period_seconds: 2
+      failure_threshold: 30
+  dependent:
+    command: "echo DEPENDENT STARTED; sleep 3600"
+    depends_on:
+      noisy:
+        condition: process_healthy

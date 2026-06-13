@@ -250,6 +250,41 @@ func (t *TerminalView) SetPty(ptyFile *os.File) {
 	}
 }
 
+// EnsureDraining starts a background reader for ptyFile if one is not already
+// running, so an interactive process's PTY is drained continuously even while
+// its pane is unfocused. Without this, once the kernel PTY buffer (~16KB on
+// Linux) fills, the process blocks on write() until the user manually focuses
+// it — stalling startup (readiness probes never pass) and shutdown.
+//
+// It is idempotent: the activeReaders guard prevents a second reader, including
+// when SetPty/Draw later focus an already-draining pane. The per-PTY terminal
+// is created at the PTY's initial size; SetPty/Draw resize it once focused.
+func (t *TerminalView) EnsureDraining(ptyFile *os.File) {
+	if ptyFile == nil {
+		return
+	}
+	t.lock.Lock()
+	if t.activeReaders[ptyFile] {
+		t.lock.Unlock()
+		return
+	}
+	term, ok := t.terminals[ptyFile]
+	if !ok {
+		term = NewAnsiTerminal(80, 24)
+		t.terminals[ptyFile] = term
+		term.SetResponseCallback(func(data []byte) {
+			if _, err := ptyFile.Write(data); err != nil {
+				log.Error().Err(err).Msg("Failed to write response to PTY")
+			}
+		})
+	}
+	t.activeReaders[ptyFile] = true
+	// Release the lock before starting the goroutine, mirroring Draw().
+	t.lock.Unlock()
+
+	go t.readPty(ptyFile, term)
+}
+
 func (t *TerminalView) readPty(ptyFile *os.File, term *AnsiTerminal) {
 	defer func() {
 		if r := recover(); r != nil {

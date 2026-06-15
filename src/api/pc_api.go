@@ -365,6 +365,33 @@ func (api *PcApi) RestartProcess(c *gin.Context) {
 }
 
 // @Schemes
+// @Id				SendProcessKeys
+// @Description	Sends keystroke(s) to an interactive process's stdin
+// @Tags			Process
+// @Summary		Send keys to an interactive process
+// @Accept			json
+// @Produce		json
+// @Param			name	path		string				true	"Process Name"
+// @Param			keys	body		api.SendKeysRequest	true	"Keys to send"
+// @Success		200		{object}	api.NameResponse	"Process Name"
+// @Failure		400		{object}	map[string]string
+// @Router			/process/send-keys/{name} [post]
+func (api *PcApi) SendProcessKeys(c *gin.Context) {
+	name := c.Param("name")
+	var req SendKeysRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := api.project.SendProcessKeys(name, req.Keys); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"name": name})
+}
+
+// @Schemes
 // @Id				ScaleProcess
 // @Description	Scale a process
 // @Tags			Process

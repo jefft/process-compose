@@ -34,6 +34,7 @@ func setupRouter(mock *mockProject) *gin.Engine {
 	r.PATCH("/processes/stop", handler.StopProcesses)
 	r.POST("/process/start/:name", handler.StartProcess)
 	r.POST("/process/restart/:name", handler.RestartProcess)
+	r.POST("/process/send-keys/:name", handler.SendProcessKeys)
 	r.POST("/project/stop", handler.ShutDownProject)
 	r.POST("/project", handler.UpdateProject)
 	r.POST("/project/configuration", handler.ReloadProject)
@@ -487,6 +488,49 @@ func TestRestartProcess_Error(t *testing.T) {
 	}
 	r := setupRouter(mock)
 	w := performRequest(r, http.MethodPost, "/process/restart/web", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- SendProcessKeys ---
+
+func TestSendProcessKeys_Success(t *testing.T) {
+	var gotName, gotKeys string
+	mock := &mockProject{
+		sendProcessKeysFn: func(name, keys string) error {
+			gotName, gotKeys = name, keys
+			return nil
+		},
+	}
+	r := setupRouter(mock)
+	w := performRequest(r, http.MethodPost, "/process/send-keys/web", `{"keys":"q"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if gotName != "web" || gotKeys != "q" {
+		t.Fatalf("expected name=web keys=q, got name=%s keys=%s", gotName, gotKeys)
+	}
+	result := parseJSON(t, w)
+	if result["name"] != "web" {
+		t.Fatalf("expected name=web, got %v", result["name"])
+	}
+}
+
+func TestSendProcessKeys_Error(t *testing.T) {
+	mock := &mockProject{
+		sendProcessKeysFn: func(name, keys string) error { return errors.New("not interactive") },
+	}
+	r := setupRouter(mock)
+	w := performRequest(r, http.MethodPost, "/process/send-keys/web", `{"keys":"q"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestSendProcessKeys_BadJSON(t *testing.T) {
+	r := setupRouter(&mockProject{})
+	w := performRequest(r, http.MethodPost, "/process/send-keys/web", `{"keys":}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}

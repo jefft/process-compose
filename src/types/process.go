@@ -199,6 +199,9 @@ func (p *ProcessConfig) ValidateProcessConfig() error {
 			return fmt.Errorf("invalid success_exit_codes value %d in process '%s': exit codes must be in the range 0-255", code, p.Name)
 		}
 	}
+	if p.ShutDownParams.SendKeys != "" && !p.IsInteractive && !p.IsTty {
+		return fmt.Errorf("process '%s': shutdown.send_keys requires is_interactive (or is_tty)", p.Name)
+	}
 	if len(p.Extensions) == 0 {
 		return nil // no error
 	}
@@ -484,6 +487,7 @@ type ShutDownParams struct {
 	ShutDownTimeout int    `yaml:"timeout_seconds,omitempty" json:"shutDownTimeout,omitempty"`
 	Signal          int    `yaml:"signal,omitempty" json:"signal,omitempty"`
 	ParentOnly      bool   `yaml:"parent_only,omitempty" json:"parentOnly,omitempty"`
+	SendKeys        string `yaml:"send_keys,omitempty" json:"sendKeys,omitempty"`
 }
 
 //go:generate stringer -type=ProcessCondition

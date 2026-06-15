@@ -565,6 +565,57 @@ const docTemplate = `{
                 }
             }
         },
+        "/process/send-keys/{name}": {
+            "post": {
+                "description": "Sends keystroke(s) to an interactive process's stdin",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Process"
+                ],
+                "summary": "Send keys to an interactive process",
+                "operationId": "SendProcessKeys",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Process Name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Keys to send",
+                        "name": "keys",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.SendKeysRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Process Name",
+                        "schema": {
+                            "$ref": "#/definitions/api.NameResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/process/signal/{name}/{signal}": {
             "patch": {
                 "description": "Sends a POSIX signal to the process",
@@ -1051,6 +1102,14 @@ const docTemplate = `{
                 }
             }
         },
+        "api.SendKeysRequest": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "string"
+                }
+            }
+        },
         "api.StatusResponse": {
             "type": "object",
             "properties": {
@@ -1419,9 +1478,12 @@ const docTemplate = `{
                 "executable": {
                     "type": "string"
                 },
+                "extends": {
+                    "type": "string"
+                },
                 "extensions": {
                     "type": "object",
-                    "additionalProperties": true
+                    "additionalProperties": {}
                 },
                 "isDaemon": {
                     "type": "boolean"
@@ -1495,6 +1557,12 @@ const docTemplate = `{
                 "shutDownParams": {
                     "$ref": "#/definitions/types.ShutDownParams"
                 },
+                "successExitCodes": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "truncateLog": {
                     "type": "boolean"
                 },
@@ -1514,7 +1582,7 @@ const docTemplate = `{
                 },
                 "extensions": {
                     "type": "object",
-                    "additionalProperties": true
+                    "additionalProperties": {}
                 }
             }
         },
@@ -1600,6 +1668,12 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                },
+                "success_exit_codes": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 },
                 "system_time": {
                     "type": "string"
@@ -1717,6 +1791,9 @@ const docTemplate = `{
             "properties": {
                 "parentOnly": {
                     "type": "boolean"
+                },
+                "sendKeys": {
+                    "type": "string"
                 },
                 "shutDownCommand": {
                     "type": "string"

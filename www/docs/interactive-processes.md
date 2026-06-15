@@ -47,3 +47,15 @@ To exit Scroll Mode and return to live output, press `ESC`.
 | `CTRL+A` followed by `UP`/`DOWN` | Enter Scroll Mode and scroll the history. |
 | `Mouse Wheel` | Scroll history (enters Scroll Mode automatically). |
 | `ESC` (in Scroll Mode) | Exit Scroll Mode and jump to bottom. |
+
+## Sending Keys Programmatically
+
+You can send keystroke(s) to a running interactive process's stdin without attaching to the TUI — useful for scripting input or stopping programs that quit on a key:
+
+```shell
+process-compose process send-keys my-interactive-process "q"
+```
+
+Control keys can be expressed with escape sequences, e.g. `'\x03'` for `Ctrl-C` or `'q\r'` to send `q` followed by `Enter`.
+
+To make process-compose send keys automatically when stopping a process, use [`shutdown.send_keys`](launcher.md#stopping-interactive-processes-with-keystrokes).

@@ -41,6 +41,7 @@ type IProject interface {
 	ReloadProject() (map[string]string, error)
 	TruncateProcessLogs(name string) error
 	GetProcessPty(name string) *os.File
+	SendProcessKeys(name string, keys string) error
 	GetFullProcessEnvironment(proc *types.ProcessConfig) []string
 	GetDependencyGraph() (*types.DependencyGraph, error)
 

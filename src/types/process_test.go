@@ -589,3 +589,16 @@ func TestValidateProcessConfigSuccessExitCodes(t *testing.T) {
 		t.Errorf("ValidateProcessConfig() expected error for negative code, got nil")
 	}
 }
+
+func TestValidateProcessConfigSendKeys(t *testing.T) {
+	keys := ShutDownParams{SendKeys: "q"}
+	if err := (&ProcessConfig{Name: "p", IsInteractive: true, ShutDownParams: keys}).ValidateProcessConfig(); err != nil {
+		t.Errorf("ValidateProcessConfig() unexpected error for interactive send_keys: %v", err)
+	}
+	if err := (&ProcessConfig{Name: "p", IsTty: true, ShutDownParams: keys}).ValidateProcessConfig(); err != nil {
+		t.Errorf("ValidateProcessConfig() unexpected error for tty send_keys: %v", err)
+	}
+	if err := (&ProcessConfig{Name: "p", ShutDownParams: keys}).ValidateProcessConfig(); err == nil {
+		t.Errorf("ValidateProcessConfig() expected error for send_keys without is_interactive, got nil")
+	}
+}

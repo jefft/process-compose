@@ -1536,6 +1536,18 @@ func (p *ProjectRunner) GetProcessPty(name string) *os.File {
 	return proc.GetPty()
 }
 
+// SendProcessKeys writes the given keys to a running interactive process's stdin.
+func (p *ProjectRunner) SendProcessKeys(name string, keys string) error {
+	proc := p.getRunningProcess(name)
+	if proc == nil {
+		if _, ok := p.project.Processes[name]; !ok {
+			return fmt.Errorf("process %s does not exist", name)
+		}
+		return fmt.Errorf("process %s is not running", name)
+	}
+	return proc.sendKeys(keys)
+}
+
 func (p *ProjectRunner) GetFullProcessEnvironment(proc *types.ProcessConfig) []string {
 	var dotEnvVars map[string]string
 	if !p.disableDotenv {

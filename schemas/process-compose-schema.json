@@ -529,6 +529,9 @@
         },
         "parent_only": {
           "type": "boolean"
+        },
+        "send_keys": {
+          "type": "string"
         }
       },
       "type": "object"

@@ -463,6 +463,9 @@ func (p *Process) stopProcess(withNoRestart bool) error {
 	if isStringDefined(p.procConf.ShutDownParams.ShutDownCommand) {
 		return p.doConfiguredStop(p.procConf.ShutDownParams)
 	}
+	if isStringDefined(p.procConf.ShutDownParams.SendKeys) {
+		return p.doSendKeysStop(p.procConf.ShutDownParams)
+	}
 	err := p.command.Stop(p.procConf.ShutDownParams.Signal, p.procConf.ShutDownParams.ParentOnly)
 	if err != nil {
 		log.Error().Err(err).Msgf("terminating %s failed", p.getName())
@@ -511,6 +514,61 @@ func (p *Process) doConfiguredStop(params types.ShutDownParams) error {
 		return p.command.Stop(int(syscall.SIGKILL), false)
 	}
 	return nil
+}
+
+// sendKeys writes the interpreted keys to the process's interactive stdin (PTY).
+// It returns an error if the process is not interactive (no PTY).
+func (p *Process) sendKeys(s string) error {
+	pty := p.command.GetPty()
+	if pty == nil {
+		return fmt.Errorf("process %s is not interactive; cannot send keys", p.getName())
+	}
+	_, err := pty.Write(interpretKeyEscapes(s))
+	return err
+}
+
+// doSendKeysStop performs a graceful, key-based shutdown: it writes the
+// configured keys to the process's stdin and waits up to the shutdown timeout
+// for the process to exit on its own. If it does not exit in time, it is killed
+// with SIGKILL (mirroring the shutdown.command fallback behavior).
+func (p *Process) doSendKeysStop(params types.ShutDownParams) error {
+	if err := p.sendKeys(params.SendKeys); err != nil {
+		log.Error().Err(err).Msgf("failed to send keys to %s, falling back to signal", p.getName())
+		return p.gracefulShutDownWithSignal(params)
+	}
+	timeout := params.ShutDownTimeout
+	if timeout == UndefinedShutdownTimeoutSec {
+		timeout = DefaultShutdownTimeoutSec
+	}
+	p.mtxStopFn.Lock()
+	p.waitForStoppedCtx, p.waitForStoppedFn = context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	p.mtxStopFn.Unlock()
+	<-p.waitForStoppedCtx.Done()
+	err := p.waitForStoppedCtx.Err()
+	switch {
+	case errors.Is(err, context.Canceled):
+		return nil // exited gracefully in response to the keys
+	case errors.Is(err, context.DeadlineExceeded):
+		log.Debug().Msgf("process %s failed to exit on keys within %d seconds, sending %d", p.getName(), timeout, syscall.SIGKILL)
+		return p.command.Stop(int(syscall.SIGKILL), false)
+	default:
+		log.Error().Err(err).Msgf("terminating %s with send_keys timeout %d failed", p.getName(), timeout)
+		return err
+	}
+}
+
+// gracefulShutDownWithSignal sends the configured signal and applies the
+// SIGKILL-on-timeout fallback. It mirrors the default branch of stopProcess and
+// is used when send_keys cannot be delivered.
+func (p *Process) gracefulShutDownWithSignal(params types.ShutDownParams) error {
+	err := p.command.Stop(params.Signal, params.ParentOnly)
+	if err != nil {
+		log.Error().Err(err).Msgf("terminating %s failed", p.getName())
+	}
+	if params.ShutDownTimeout != UndefinedShutdownTimeoutSec {
+		return p.forceKillOnTimeout()
+	}
+	return err
 }
 
 func (p *Process) isRunning() bool {

@@ -33,6 +33,7 @@ Execute operations on the available processes
 * [process-compose process ports](process-compose_process_ports.md)	 - Get the ports that a process is listening on
 * [process-compose process restart](process-compose_process_restart.md)	 - Restart a process
 * [process-compose process scale](process-compose_process_scale.md)	 - Scale a process to a given count
+* [process-compose process send-keys](process-compose_process_send-keys.md)	 - Send keystroke(s) to an interactive process's stdin
 * [process-compose process start](process-compose_process_start.md)	 - Start a process
 * [process-compose process stop](process-compose_process_stop.md)	 - Stop running processes
 

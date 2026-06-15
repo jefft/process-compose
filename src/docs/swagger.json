@@ -36,6 +36,14 @@
                 },
                 "type": "object"
             },
+            "api.SendKeysRequest": {
+                "properties": {
+                    "keys": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "api.StatusResponse": {
                 "properties": {
                     "status": {
@@ -403,8 +411,11 @@
                     "executable": {
                         "type": "string"
                     },
+                    "extends": {
+                        "type": "string"
+                    },
                     "extensions": {
-                        "additionalProperties": true,
+                        "additionalProperties": {},
                         "type": "object"
                     },
                     "isDaemon": {
@@ -479,6 +490,12 @@
                     "shutDownParams": {
                         "$ref": "#/components/schemas/types.ShutDownParams"
                     },
+                    "successExitCodes": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array"
+                    },
                     "truncateLog": {
                         "type": "boolean"
                     },
@@ -497,7 +514,7 @@
                         "$ref": "#/components/schemas/types.ProcessCondition"
                     },
                     "extensions": {
-                        "additionalProperties": true,
+                        "additionalProperties": {},
                         "type": "object"
                     }
                 },
@@ -584,6 +601,12 @@
                     },
                     "status": {
                         "type": "string"
+                    },
+                    "success_exit_codes": {
+                        "items": {
+                            "type": "integer"
+                        },
+                        "type": "array"
                     },
                     "system_time": {
                         "type": "string"
@@ -701,6 +724,9 @@
                 "properties": {
                     "parentOnly": {
                         "type": "boolean"
+                    },
+                    "sendKeys": {
+                        "type": "string"
                     },
                     "shutDownCommand": {
                         "type": "string"
@@ -1369,6 +1395,64 @@
                     }
                 },
                 "summary": "Scale a process to a given replicas count",
+                "tags": [
+                    "Process"
+                ]
+            }
+        },
+        "/process/send-keys/{name}": {
+            "post": {
+                "description": "Sends keystroke(s) to an interactive process's stdin",
+                "operationId": "SendProcessKeys",
+                "parameters": [
+                    {
+                        "description": "Process Name",
+                        "in": "path",
+                        "name": "name",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/api.SendKeysRequest"
+                            }
+                        }
+                    },
+                    "description": "Keys to send",
+                    "required": true,
+                    "x-originalParamName": "keys"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/api.NameResponse"
+                                }
+                            }
+                        },
+                        "description": "Process Name"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "description": "Bad Request"
+                    }
+                },
+                "summary": "Send keys to an interactive process",
                 "tags": [
                     "Process"
                 ]

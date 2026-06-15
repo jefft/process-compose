@@ -231,6 +231,8 @@ processes:
   my-vim:
     command: vim process-compose.override.yaml
     is_interactive: true
+    shutdown:
+      send_keys: ":q\r"
 
   test-cron:
     command: "echo Cron triggered at $(date)"

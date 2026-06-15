@@ -28,3 +28,8 @@ type LogsResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+// SendKeysRequest represents the body for sending keystrokes to a process's stdin.
+type SendKeysRequest struct {
+	Keys string `json:"keys"`
+}

@@ -41,6 +41,7 @@ type mockProject struct {
 	getFullProcessEnvFn     func(*types.ProcessConfig) []string
 	getDependencyGraphFn    func() (*types.DependencyGraph, error)
 	sendSignalFn            func(string, int) error
+	sendProcessKeysFn       func(string, string) error
 }
 
 func (m *mockProject) ShutDownProject() error {
@@ -249,6 +250,13 @@ func (m *mockProject) TruncateProcessLogs(name string) error {
 func (m *mockProject) GetProcessPty(name string) *os.File {
 	if m.getProcessPtyFn != nil {
 		return m.getProcessPtyFn(name)
+	}
+	return nil
+}
+
+func (m *mockProject) SendProcessKeys(name string, keys string) error {
+	if m.sendProcessKeysFn != nil {
+		return m.sendProcessKeysFn(name, keys)
 	}
 	return nil
 }

@@ -163,6 +163,10 @@ func (p *PcClient) RestartProcess(name string) error {
 	return p.restartProcess(name)
 }
 
+func (p *PcClient) SendProcessKeys(name string, keys string) error {
+	return p.sendProcessKeys(name, keys)
+}
+
 func (p *PcClient) StartNamespace(name string) error {
 	return p.startNamespace(name)
 }

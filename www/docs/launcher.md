@@ -228,6 +228,33 @@ In case the `shutdown.command` is defined:
 
 In case the `shutdown.timeout_seconds` is defined (without `shutdown.command`) and the process will fail to terminate within that time, the process group will receive the `SIGKILL` signal.
 
+### Stopping Interactive Processes With Keystrokes
+
+Some tty/console programs exit only on a keystroke (e.g. `q`) and ignore termination signals. For these, `shutdown.send_keys` writes the configured keys to the process's stdin to trigger a clean, key-based shutdown. It requires `is_interactive: true` (or `is_tty: true`).
+
+```yaml
+processes:
+  viewer:
+    command: "less /var/log/syslog"
+    is_interactive: true
+    shutdown:
+      send_keys: "q"        # written to the process's stdin on stop
+      timeout_seconds: 10   # default 10
+```
+
+When `shutdown.send_keys` is defined (and `shutdown.command` is not):
+
+1. The interpreted keys are written to the running process's stdin.
+2. Wait for `shutdown.timeout_seconds` for the process to exit (if not defined wait for 10 seconds).
+3. In case of timeout, the process group will receive the `SIGKILL` signal.
+
+Control keys can be expressed with escape sequences: `\xHH` (hex, e.g. `\x03` for `Ctrl-C`), `\r`, `\n`, `\t`, `\e` (ESC), `\0` (NUL), `\\`, and the usual `\a \b \f \v`. No trailing newline is added, so add `\r` yourself if the program needs `Enter` to submit (e.g. `send_keys: 'q\r'`).
+
+!!! note
+    Prefer **single-quoted** YAML values for escape sequences (`send_keys: '\x03'`). Double-quoted YAML scalars already process `\x..` escapes before process-compose sees them; single quotes pass the literal sequence through unchanged.
+
+If both `shutdown.command` and `shutdown.send_keys` are defined, `shutdown.command` takes precedence.
+
 ## Successful Exit Codes
 
 By default only exit code `0` is considered a success; any other code marks the process as `Failed`. When `process-compose` terminates a process with a signal, the process exits with the UNIX convention `128 + signal` — for example `130` for `SIGINT` (signal 2) or `143` for `SIGTERM` (signal 15). Many runtimes (JVM/Quarkus, Node/Vite, signal-respecting Go binaries) follow this convention, so a clean signal-driven shutdown would otherwise be reported as a failure.

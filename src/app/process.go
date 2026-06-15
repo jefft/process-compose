@@ -342,11 +342,11 @@ func (p *Process) isRestartable() bool {
 		return false
 	}
 
-	if exitCode != 0 && p.procConf.RestartPolicy.Restart == types.RestartPolicyExitOnFailure {
+	if !p.procConf.IsExitCodeSuccess(exitCode) && p.procConf.RestartPolicy.Restart == types.RestartPolicyExitOnFailure {
 		return false
 	}
 
-	if exitCode != 0 && p.procConf.RestartPolicy.Restart == types.RestartPolicyOnFailure {
+	if !p.procConf.IsExitCodeSuccess(exitCode) && p.procConf.RestartPolicy.Restart == types.RestartPolicyOnFailure {
 		if p.procConf.RestartPolicy.MaxRestarts == 0 {
 			return true
 		}

@@ -291,7 +291,7 @@ func (p *ProjectRunner) waitIfNeeded(process *types.ProcessConfig) error {
 			case types.ProcessConditionCompletedSuccessfully:
 				log.Info().Msgf("%s is waiting for %s to complete successfully", process.ReplicaName, k)
 				exitCode := proc.waitForCompletion()
-				if exitCode != 0 {
+				if !proc.procConf.IsExitCodeSuccess(exitCode) {
 					return fmt.Errorf("process %s depended on %s to complete successfully, but it exited with status %d",
 						process.ReplicaName, k, exitCode)
 				}
@@ -323,10 +323,17 @@ func (p *ProjectRunner) waitIfNeeded(process *types.ProcessConfig) error {
 }
 
 func (p *ProjectRunner) onProcessEnd(exitCode int, procConf *types.ProcessConfig) {
-	if (exitCode != 0 && procConf.RestartPolicy.Restart == types.RestartPolicyExitOnFailure) ||
+	success := procConf.IsExitCodeSuccess(exitCode)
+	if (!success && procConf.RestartPolicy.Restart == types.RestartPolicyExitOnFailure) ||
 		procConf.RestartPolicy.ExitOnEnd {
+		// A success_exit_codes match is equivalent to a clean exit, so the
+		// project should not inherit the raw non-zero code (e.g. on exit_on_end).
+		code := exitCode
+		if success {
+			code = 0
+		}
 		p.exitCodeMutex.Lock()
-		p.exitCode = exitCode
+		p.exitCode = code
 		p.exitCodeMutex.Unlock()
 		log.Info().Msgf("Process %s exited with code %d. Shutting down project...", procConf.Name, exitCode)
 		_ = p.ShutDownProject()

@@ -443,7 +443,7 @@ func (pv *pcView) getIconForState(state types.ProcessState) (string, tcell.Color
 		types.ProcessStateScheduled:
 		return "●", pv.styles.ProcTable().FgPending.Color()
 	case types.ProcessStateCompleted:
-		if state.ExitCode == 0 {
+		if state.IsExitCodeSuccess() {
 			return "●", pv.styles.ProcTable().FgCompleted.Color()
 		}
 		return "✘", pv.styles.ProcTable().FgError.Color()

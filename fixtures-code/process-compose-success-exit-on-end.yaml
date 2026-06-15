@@ -1,0 +1,12 @@
+version: "0.5"
+
+# Exercises the project exit-code normalization in onProcessEnd: a process that
+# exits with an allowlisted code (130) under `exit_on_end` must shut the project
+# down with exit code 0, not inherit the raw 130. The test clears
+# success_exit_codes for the control run to prove the allowlist is what flips it.
+processes:
+  signal_exit:
+    command: "exit 130"
+    success_exit_codes: [130] # 130 == 128 + SIGINT, treated as a clean exit
+    availability:
+      exit_on_end: true

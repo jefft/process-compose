@@ -19,9 +19,6 @@ func disableColor(t *testing.T) {
 	t.Cleanup(func() { color.NoColor = prev })
 }
 
-//go:fix inline
-func ptrTime(t time.Time) *time.Time { return new(t) }
-
 func TestFormatDuration(t *testing.T) {
 	tests := []struct {
 		name string

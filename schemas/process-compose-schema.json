@@ -338,6 +338,12 @@
         },
         "monitor_silence_threshold": {
           "type": "integer"
+        },
+        "success_exit_codes": {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
         }
       },
       "type": "object"

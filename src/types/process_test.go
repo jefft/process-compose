@@ -315,6 +315,38 @@ func TestProcessStateIsReady(t *testing.T) {
 			},
 			isReady: false,
 		},
+		{
+			name: "completed, signal exit code in success_exit_codes",
+			p: &ProcessState{
+				Status:           ProcessStateCompleted,
+				HasHealthProbe:   false,
+				Health:           ProcessHealthUnknown,
+				ExitCode:         130,
+				SuccessExitCodes: []int{130},
+			},
+			isReady: true,
+		},
+		{
+			name: "completed, signal exit code not in success_exit_codes",
+			p: &ProcessState{
+				Status:           ProcessStateCompleted,
+				HasHealthProbe:   false,
+				Health:           ProcessHealthUnknown,
+				ExitCode:         130,
+				SuccessExitCodes: []int{143},
+			},
+			isReady: false,
+		},
+		{
+			name: "completed, non-zero exit, no success_exit_codes",
+			p: &ProcessState{
+				Status:         ProcessStateCompleted,
+				HasHealthProbe: false,
+				Health:         ProcessHealthUnknown,
+				ExitCode:       130,
+			},
+			isReady: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -468,6 +500,28 @@ func TestDisplayProcessStatus(t *testing.T) {
 			},
 			expected: "Failed",
 		},
+		{
+			name: "completed with signal exit code in success_exit_codes (not failed)",
+			state: ProcessState{
+				Status:           ProcessStateCompleted,
+				IsRunning:        false,
+				ExitCode:         130,
+				SuccessExitCodes: []int{130},
+				NextRunTime:      nil,
+			},
+			expected: ProcessStateCompleted,
+		},
+		{
+			name: "completed with signal exit code not in success_exit_codes (failed)",
+			state: ProcessState{
+				Status:           ProcessStateCompleted,
+				IsRunning:        false,
+				ExitCode:         130,
+				SuccessExitCodes: []int{143},
+				NextRunTime:      nil,
+			},
+			expected: "Failed",
+		},
 	}
 
 	for _, tt := range tests {
@@ -476,5 +530,62 @@ func TestDisplayProcessStatus(t *testing.T) {
 				t.Errorf("DisplayProcessStatus() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestIsExitCodeSuccess(t *testing.T) {
+	tests := []struct {
+		name         string
+		code         int
+		successCodes []int
+		want         bool
+	}{
+		{name: "zero is always success", code: 0, successCodes: nil, want: true},
+		{name: "zero success even with a list", code: 0, successCodes: []int{130}, want: true},
+		{name: "non-zero not listed is failure", code: 1, successCodes: nil, want: false},
+		{name: "non-zero not in list is failure", code: 1, successCodes: []int{130}, want: false},
+		{name: "SIGINT exit in list is success", code: 130, successCodes: []int{130}, want: true},
+		{name: "SIGTERM exit in list is success", code: 143, successCodes: []int{0, 130, 143}, want: true},
+		{name: "in-list among many", code: 130, successCodes: []int{2, 130, 143}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isExitCodeSuccess(tt.code, tt.successCodes); got != tt.want {
+				t.Errorf("isExitCodeSuccess(%d, %v) = %v, want %v", tt.code, tt.successCodes, got, tt.want)
+			}
+			cfg := &ProcessConfig{SuccessExitCodes: tt.successCodes}
+			if got := cfg.IsExitCodeSuccess(tt.code); got != tt.want {
+				t.Errorf("ProcessConfig.IsExitCodeSuccess(%d) = %v, want %v", tt.code, got, tt.want)
+			}
+			state := &ProcessState{ExitCode: tt.code, SuccessExitCodes: tt.successCodes}
+			if got := state.IsExitCodeSuccess(); got != tt.want {
+				t.Errorf("ProcessState.IsExitCodeSuccess() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProcessConfigCompareSuccessExitCodes(t *testing.T) {
+	a := &ProcessConfig{Name: "p", SuccessExitCodes: []int{0, 130}}
+	same := &ProcessConfig{Name: "p", SuccessExitCodes: []int{0, 130}}
+	diff := &ProcessConfig{Name: "p", SuccessExitCodes: []int{0, 143}}
+
+	if !a.Compare(same) {
+		t.Errorf("Compare() = false for identical SuccessExitCodes, want true")
+	}
+	if a.Compare(diff) {
+		t.Errorf("Compare() = true for differing SuccessExitCodes, want false")
+	}
+}
+
+func TestValidateProcessConfigSuccessExitCodes(t *testing.T) {
+	if err := (&ProcessConfig{Name: "p", SuccessExitCodes: []int{0, 130, 143, 255}}).ValidateProcessConfig(); err != nil {
+		t.Errorf("ValidateProcessConfig() unexpected error for valid codes: %v", err)
+	}
+	if err := (&ProcessConfig{Name: "p", SuccessExitCodes: []int{256}}).ValidateProcessConfig(); err == nil {
+		t.Errorf("ValidateProcessConfig() expected error for out-of-range code 256, got nil")
+	}
+	if err := (&ProcessConfig{Name: "p", SuccessExitCodes: []int{-1}}).ValidateProcessConfig(); err == nil {
+		t.Errorf("ValidateProcessConfig() expected error for negative code, got nil")
 	}
 }

@@ -228,6 +228,30 @@ In case the `shutdown.command` is defined:
 
 In case the `shutdown.timeout_seconds` is defined (without `shutdown.command`) and the process will fail to terminate within that time, the process group will receive the `SIGKILL` signal.
 
+## Successful Exit Codes
+
+By default only exit code `0` is considered a success; any other code marks the process as `Failed`. When `process-compose` terminates a process with a signal, the process exits with the UNIX convention `128 + signal` — for example `130` for `SIGINT` (signal 2) or `143` for `SIGTERM` (signal 15). Many runtimes (JVM/Quarkus, Node/Vite, signal-respecting Go binaries) follow this convention, so a clean signal-driven shutdown would otherwise be reported as a failure.
+
+`success_exit_codes` is a per-process allowlist of additional exit codes to treat as a success (modeled after systemd's `SuccessExitStatus`):
+
+```yaml hl_lines="4"
+processes:
+  quarkus:
+    command: "./mvnw quarkus:dev"
+    success_exit_codes: [130] # 130 == 128 + SIGINT, treated as a clean exit
+    shutdown:
+      signal: 2 # SIGINT
+```
+
+A listed exit code is treated exactly like `0` everywhere:
+
+- The process shows as `Completed` (not `Failed`) in the TUI, `process list`, and the REST API readiness.
+- Restart policies do not see it as a failure — `on_failure` will not restart it and `exit_on_failure` will not trigger a project shutdown.
+- `depends_on` conditions of type `process_completed_successfully` are satisfied.
+- The project's own exit code is `0`.
+
+`0` is always a success and never needs to be listed. Codes must be in the range `0-255`.
+
 ## Background (detached) Processes
 
 ```yaml hl_lines="4"

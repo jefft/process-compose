@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -64,6 +65,7 @@ type (
 		DisableCommandRendering bool                `yaml:"is_template_disabled,omitempty" json:"disableCommandRendering,omitempty"`
 		MonitorFor              MonitorFor          `yaml:"monitor_for,omitempty" json:"monitorFor,omitempty" jsonschema:"type=string,enum=none,enum=activity,enum=silence"`
 		MonitorSilenceThreshold time.Duration       `yaml:"monitor_silence_threshold,omitempty" json:"monitorSilenceThreshold,omitempty"`
+		SuccessExitCodes        []int               `yaml:"success_exit_codes,omitempty" json:"successExitCodes,omitempty"`
 	}
 )
 
@@ -105,6 +107,21 @@ func (p *ProcessConfig) IsMCPResource() bool {
 	return p.MCP != nil && p.MCP.IsResource()
 }
 
+// isExitCodeSuccess reports whether a process exit code should be treated as a
+// successful exit. Code 0 is always successful; any code listed in successCodes
+// is additionally treated as success. This is how `success_exit_codes` lets
+// signal-induced exits (128+signal, e.g. 130 for SIGINT, 143 for SIGTERM) count
+// as healthy outcomes rather than failures (systemd's `SuccessExitStatus`).
+func isExitCodeSuccess(code int, successCodes []int) bool {
+	return code == 0 || slices.Contains(successCodes, code)
+}
+
+// IsExitCodeSuccess reports whether code is a successful exit for this process,
+// honoring its configured SuccessExitCodes allowlist.
+func (p *ProcessConfig) IsExitCodeSuccess(code int) bool {
+	return isExitCodeSuccess(code, p.SuccessExitCodes)
+}
+
 // Compare returns true if two process configs are equal
 func (p *ProcessConfig) Compare(another *ProcessConfig) bool {
 	if p == nil || another == nil {
@@ -140,7 +157,8 @@ func (p *ProcessConfig) Compare(another *ProcessConfig) bool {
 		!reflect.DeepEqual(p.DependsOn, another.DependsOn) ||
 		!reflect.DeepEqual(p.RestartPolicy, another.RestartPolicy) ||
 		!reflect.DeepEqual(p.Environment, another.Environment) ||
-		!reflect.DeepEqual(p.Args, another.Args) {
+		!reflect.DeepEqual(p.Args, another.Args) ||
+		!reflect.DeepEqual(p.SuccessExitCodes, another.SuccessExitCodes) {
 		//diffs := compareStructs(*p, *another)
 		//log.Warn().Msgf("Structs are different: %s", diffs)
 		return false
@@ -176,6 +194,11 @@ func (p *ProcessConfig) AssignProcessExecutableAndArgs(shellConf *command.ShellC
 }
 
 func (p *ProcessConfig) ValidateProcessConfig() error {
+	for _, code := range p.SuccessExitCodes {
+		if code < 0 || code > 255 {
+			return fmt.Errorf("invalid success_exit_codes value %d in process '%s': exit codes must be in the range 0-255", code, p.Name)
+		}
+	}
 	if len(p.Extensions) == 0 {
 		return nil // no error
 	}
@@ -213,19 +236,20 @@ func compareStructs(a, b any) []string {
 
 func NewProcessState(proc *ProcessConfig) *ProcessState {
 	state := &ProcessState{
-		Name:           proc.ReplicaName,
-		Namespace:      proc.Namespace,
-		Status:         ProcessStatePending,
-		SystemTime:     PlaceHolderValue,
-		Age:            time.Duration(0),
-		IsRunning:      false,
-		Health:         ProcessHealthUnknown,
-		HasHealthProbe: proc.ReadinessProbe != nil || proc.LivenessProbe != nil,
-		Restarts:       0,
-		ExitCode:       0,
-		Mem:            0,
-		CPU:            0,
-		Pid:            0,
+		Name:             proc.ReplicaName,
+		Namespace:        proc.Namespace,
+		Status:           ProcessStatePending,
+		SystemTime:       PlaceHolderValue,
+		Age:              time.Duration(0),
+		IsRunning:        false,
+		Health:           ProcessHealthUnknown,
+		HasHealthProbe:   proc.ReadinessProbe != nil || proc.LivenessProbe != nil,
+		Restarts:         0,
+		ExitCode:         0,
+		SuccessExitCodes: proc.SuccessExitCodes,
+		Mem:              0,
+		CPU:              0,
+		Pid:              0,
 	}
 	if proc.Disabled {
 		state.Status = ProcessStateDisabled
@@ -245,6 +269,7 @@ type ProcessState struct {
 	HasHealthProbe   bool          `json:"has_ready_probe"`
 	Restarts         int           `json:"restarts"`
 	ExitCode         int           `json:"exit_code"`
+	SuccessExitCodes []int         `json:"success_exit_codes,omitempty"`
 	Pid              int           `json:"pid"`
 	IsElevated       bool          `json:"is_elevated"`
 	PasswordProvided bool          `json:"password_provided"`
@@ -323,6 +348,12 @@ func (p *ProcessState) IsReady() bool {
 	return isReady
 }
 
+// IsExitCodeSuccess reports whether this process's exit code is considered a
+// success, honoring its SuccessExitCodes allowlist (carried from the config).
+func (p *ProcessState) IsExitCodeSuccess() bool {
+	return isExitCodeSuccess(p.ExitCode, p.SuccessExitCodes)
+}
+
 // Check if a process is running and healthy and explain why.
 //
 // If `hasHealthProbe` is true, the process must be healthy to be considered
@@ -350,7 +381,7 @@ func (p *ProcessState) IsReadyReason() (bool, string) {
 		return false, fmt.Sprintf("health is %s", health)
 	} else if p.Health != ProcessHealthReady && p.Health != ProcessHealthUnknown {
 		return false, fmt.Sprintf("health is %s", p.Health)
-	} else if p.ExitCode != 0 {
+	} else if !p.IsExitCodeSuccess() {
 		return false, fmt.Sprintf("failed with exit code %d", p.ExitCode)
 	}
 	return true, ""
@@ -428,7 +459,7 @@ func DisplayProcessStatus(state ProcessState) string {
 	if state.NextRunTime != nil && !state.IsRunning {
 		return ProcessStateScheduled
 	}
-	if state.Status == ProcessStateCompleted && state.ExitCode != 0 {
+	if state.Status == ProcessStateCompleted && !state.IsExitCodeSuccess() {
 		return "Failed"
 	}
 	return state.Status

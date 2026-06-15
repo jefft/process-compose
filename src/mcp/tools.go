@@ -80,13 +80,13 @@ func (s *Server) handleToolInvocation(processName string, request mcp.CallToolRe
 	timeout := s.getTimeout(processName)
 
 	// Wait for process to complete
-	exitCode, output, err := s.waitForProcess(processName, timeout)
+	exitCode, success, output, err := s.waitForProcess(processName, timeout)
 	if err != nil {
 		return mcp.NewToolResultErrorf("error waiting for process: %v", err), nil
 	}
 
 	// Check exit code
-	if exitCode != 0 {
+	if !success {
 		return mcp.NewToolResultErrorf("process exited with code %d\n\nOutput:\n%s", exitCode, output), nil
 	}
 
@@ -97,8 +97,10 @@ func (s *Server) handleToolInvocation(processName string, request mcp.CallToolRe
 	return mcp.NewToolResultText(output), nil
 }
 
-// waitForProcess waits for a process to complete and returns its output
-func (s *Server) waitForProcess(processName string, timeout time.Duration) (int, string, error) {
+// waitForProcess waits for a process to complete and returns its exit code,
+// whether that exit code counts as success (honoring success_exit_codes), and
+// its output.
+func (s *Server) waitForProcess(processName string, timeout time.Duration) (int, bool, string, error) {
 	// Poll for process completion
 	pollInterval := 100 * time.Millisecond
 
@@ -124,7 +126,7 @@ func (s *Server) waitForProcess(processName string, timeout time.Duration) (int,
 				state.Status == types.ProcessStateSkipped {
 				// Get output from log buffer
 				output := s.getProcessOutput(processName)
-				return state.ExitCode, output, nil
+				return state.ExitCode, state.IsExitCodeSuccess(), output, nil
 			}
 
 			// Process is still running, continue waiting
@@ -136,10 +138,10 @@ func (s *Server) waitForProcess(processName string, timeout time.Duration) (int,
 			if err != nil {
 				log.Error().Err(err).Str("process", processName).Msg("Failed to stop MCP process")
 			}
-			return -1, "", fmt.Errorf("process execution timeout")
+			return -1, false, "", fmt.Errorf("process execution timeout")
 
 		case <-s.ctx.Done():
-			return -1, "", fmt.Errorf("server shutting down")
+			return -1, false, "", fmt.Errorf("server shutting down")
 		}
 	}
 }

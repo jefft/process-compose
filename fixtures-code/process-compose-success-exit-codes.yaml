@@ -1,0 +1,22 @@
+version: "0.5"
+
+# Exercises `success_exit_codes` (issue #506): a signal-induced exit such as 130
+# (SIGINT) is the expected, healthy outcome and should be treated as success.
+processes:
+  # 130 is allowlisted -> treated as success: on_failure does NOT restart it,
+  # final status is a clean Completed (not Failed).
+  allowed:
+    command: "exit 130"
+    success_exit_codes: [130]
+    availability:
+      restart: "on_failure"
+      max_restarts: 3
+
+  # Control: identical exit code, but no allowlist -> still a failure, so
+  # on_failure restarts it up to max_restarts before it finally completes.
+  control:
+    command: "exit 130"
+    availability:
+      restart: "on_failure"
+      max_restarts: 1
+      backoff_seconds: 1

@@ -25,5 +25,5 @@ func (p *Process) notifyDaemonStopped() {
 }
 
 func (p *Process) isDaemonLaunched() bool {
-	return p.procConf.IsDaemon && p.procState.ExitCode == 0
+	return p.procConf.IsDaemon && p.procConf.IsExitCodeSuccess(p.procState.ExitCode)
 }

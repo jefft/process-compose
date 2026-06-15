@@ -45,13 +45,13 @@ func (s *Server) handleResourceRequest(processName string, request mcp.ReadResou
 	timeout := s.getTimeout(processName)
 
 	// Wait for process to complete
-	exitCode, output, err := s.waitForProcess(processName, timeout)
+	exitCode, success, output, err := s.waitForProcess(processName, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("error waiting for process: %v", err)
 	}
 
 	// Check exit code
-	if exitCode != 0 {
+	if !success {
 		return nil, fmt.Errorf("process exited with code %d\n\nOutput:\n%s", exitCode, output)
 	}
 

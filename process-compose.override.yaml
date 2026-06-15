@@ -272,3 +272,10 @@ processes:
     command: "echo 'derived process' env: $$ORIGIN $$NUM $$LIVE"
     environment:
       - "LIVE=LONG_AND_PROSPER"
+
+  graceful-shutdown:
+    description: "exits 130 (128+SIGINT) on stop; allowlisted -> Completed"
+    command: "trap 'exit 130' INT; sleep 600"
+    success_exit_codes: [130] # 128 + SIGINT(2)
+    shutdown:
+      signal: 2 # send SIGINT instead of SIGTERM

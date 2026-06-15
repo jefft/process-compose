@@ -189,6 +189,135 @@ func TestSystem_TestComposeChainExit(t *testing.T) {
 	})
 }
 
+func TestSystem_TestSuccessExitCodes(t *testing.T) {
+	fixture := filepath.Join("..", "..", "fixtures-code", "process-compose-success-exit-codes.yaml")
+	project, err := loader.Load(&loader.LoaderOptions{
+		FileNames: []string{fixture},
+	})
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	runner, err := NewProjectRunner(&ProjectOpts{
+		project:        project,
+		processesToRun: []string{},
+	})
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- runner.Run()
+	}()
+
+	// `allowed` exits 130, which is in its success_exit_codes -> treated as a
+	// clean success: it completes without restarting.
+	waitForProcessState(t, runner, "allowed", types.ProcessStateCompleted, 10*time.Second)
+	// `control` exits 130 with no allowlist -> a failure that on_failure restarts
+	// (max_restarts=1) before it finally completes.
+	waitForProcessState(t, runner, "control", types.ProcessStateCompleted, 10*time.Second)
+	if t.Failed() {
+		_ = runner.ShutDownProject()
+		return
+	}
+
+	allowed, err := runner.GetProcessState("allowed")
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	if allowed.ExitCode != 130 {
+		t.Errorf("allowed: exit code = %d, want 130", allowed.ExitCode)
+	}
+	if allowed.Restarts != 0 {
+		t.Errorf("allowed: restarts = %d, want 0 (130 is in success_exit_codes)", allowed.Restarts)
+	}
+	if !allowed.IsReady() {
+		t.Errorf("allowed: IsReady() = false, want true (130 is a success exit code)")
+	}
+	if got := types.DisplayProcessStatus(*allowed); got == "Failed" {
+		t.Errorf("allowed: DisplayProcessStatus() = Failed, want a non-failed status")
+	}
+
+	control, err := runner.GetProcessState("control")
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	if control.Restarts == 0 {
+		t.Errorf("control: restarts = 0, want > 0 (130 not in success_exit_codes => on_failure restart)")
+	}
+	if control.IsReady() {
+		t.Errorf("control: IsReady() = true, want false (130 is a failure without success_exit_codes)")
+	}
+
+	// No exit_on_* policy is set, so the project completes cleanly (exit code 0).
+	select {
+	case e := <-runErr:
+		if e != nil {
+			t.Errorf("runner.Run() = %v, want nil", e)
+		}
+	case <-time.After(10 * time.Second):
+		_ = runner.ShutDownProject()
+		t.Error("runner.Run() did not return after both processes completed")
+	}
+}
+
+// TestSystem_TestSuccessExitCodesExitOnEnd verifies that an allowlisted exit
+// code combined with exit_on_end normalizes the project's own exit code to 0,
+// while the same code without the allowlist still propagates as a failure.
+func TestSystem_TestSuccessExitCodesExitOnEnd(t *testing.T) {
+	fixture := filepath.Join("..", "..", "fixtures-code", "process-compose-success-exit-on-end.yaml")
+
+	loadProject := func(t *testing.T) *types.Project {
+		t.Helper()
+		project, err := loader.Load(&loader.LoaderOptions{
+			FileNames: []string{fixture},
+		})
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		return project
+	}
+
+	t.Run("allowlisted code exits the project cleanly", func(t *testing.T) {
+		runner, err := NewProjectRunner(&ProjectOpts{
+			project:        loadProject(t),
+			processesToRun: []string{},
+		})
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		// signal_exit exits 130, which is in success_exit_codes, so exit_on_end
+		// must shut the project down with code 0 rather than inheriting 130.
+		if err := runner.Run(); err != nil {
+			t.Errorf("runner.Run() = %v, want nil", err)
+		}
+	})
+
+	t.Run("same code without allowlist propagates as failure", func(t *testing.T) {
+		project := loadProject(t)
+		// Drop the allowlist to prove it is what normalizes the exit code: the
+		// raw 130 must now surface as the project's non-zero exit code.
+		proc := project.Processes["signal_exit"]
+		proc.SuccessExitCodes = nil
+		project.Processes["signal_exit"] = proc
+
+		runner, err := NewProjectRunner(&ProjectOpts{
+			project:        project,
+			processesToRun: []string{},
+		})
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		err = runner.Run()
+		if err == nil {
+			t.Fatal("runner.Run() = nil, want non-zero exit code error")
+		}
+		if want := "project non-zero exit code: 130"; err.Error() != want {
+			t.Errorf("runner.Run() = %q, want %q", err.Error(), want)
+		}
+	})
+}
+
 func TestSystem_TestComposeCircular(t *testing.T) {
 	fixture1 := filepath.Join("..", "..", "fixtures-code", "process-compose-circular.yaml")
 	fixture2 := filepath.Join("..", "..", "fixtures-code", "process-compose-non-circular.yaml")

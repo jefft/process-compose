@@ -21,7 +21,10 @@ processes:
 
 ### Attaching to a Process
 
-In the TUI, select the interactive process from the list. The process output will be displayed in the logs view.
+In the TUI, select the interactive process from the list. Its live output is rendered in the process's pane, the same pane that shows logs for non-interactive processes.
+
+!!! note
+    An interactive process is backed by a pseudo-terminal (PTY) and its output is rendered live in its pane. That output is **not** captured into the line log buffer, so `process-compose process logs <name>` (and the REST/WebSocket log API and file logging) will return nothing for it. If you need a process's output collected in the logs, leave it non-interactive. Use `is_interactive` only when you need to interact with the process.
 
 ### Switching Focus
 

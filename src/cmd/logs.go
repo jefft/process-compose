@@ -58,6 +58,8 @@ var logsCmd = &cobra.Command{
 			}
 		}
 
+		notifyInteractiveProcesses(name)
+
 		printProcessName := !*pcFlags.IsRawLogOutput && len(strings.Split(name, ",")) > 1
 		ct := pclog.NewColorTracker()
 		logger := getLogClient()
@@ -93,6 +95,35 @@ func init() {
 	logsCmd.Flags().BoolVar(pcFlags.IsRawLogOutput, "raw-log", *pcFlags.IsRawLogOutput, "If set, don't format the multi process log output to include the process name")
 	logsCmd.Flags().IntVarP(pcFlags.LogTailLength, "tail", "n", *pcFlags.LogTailLength, "Number of lines to show from the end of the logs")
 	logsCmd.Flags().StringVarP(pcFlags.Namespace, "namespace", "N", *pcFlags.Namespace, "Logs all the processes in the given namespace")
+}
+
+// notifyInteractiveProcesses prints a notice for any requested process that is
+// interactive. Interactive processes use a PTY and render their output in the
+// terminal pane; that output is not captured into the line log buffer, so
+// `process logs` has nothing to show for them. Emitting an explicit notice
+// keeps an empty result from looking like a bug (issue #511). It does not skip
+// streaming, so any error/probe lines still captured for the process come
+// through as before.
+func notifyInteractiveProcesses(names string) {
+	c := getClient()
+	for pName := range strings.SplitSeq(names, ",") {
+		pName = strings.TrimSpace(pName)
+		if pName == "" {
+			continue
+		}
+		info, err := c.GetProcessInfo(pName)
+		if err != nil {
+			// Couldn't fetch the process config (e.g. unknown process);
+			// let the log subscription surface that error as before.
+			continue
+		}
+		if info.IsInteractive {
+			// Write to stderr (not the zerolog logger, which the CLI routes to
+			// a log file): the user running `process logs` needs to see this on
+			// their terminal, while stdout stays clean for piped log output.
+			fmt.Fprintf(os.Stderr, "process %q is interactive: 'process logs' has nothing to display for it\n", pName)
+		}
+	}
 }
 
 func getLogClient() *client.LogClient {

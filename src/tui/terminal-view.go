@@ -186,10 +186,12 @@ func (t *TerminalView) SetPty(ptyFile *os.File) {
 
 	t.pty = ptyFile
 	if ptyFile != nil {
-		// Get current actual dimensions from the Box FIRST
-		_, _, width, height := t.GetInnerRect()
-		// If dimensions are invalid or too small (likely not yet laid out), use default
-		if width < 20 || height < 10 {
+		// Get current actual dimensions from the Box FIRST. If the pane is not
+		// laid out yet, use a placeholder but leave the terminal deferred so its
+		// output is not parsed at the wrong width (#512) — Draw activates it once
+		// the real geometry is known.
+		width, height, laidOut := t.paneSize()
+		if !laidOut {
 			width = 80
 			height = 24
 		}
@@ -213,12 +215,13 @@ func (t *TerminalView) SetPty(ptyFile *os.File) {
 		// Check if we already have a terminal for this PTY
 		if term, ok := t.terminals[ptyFile]; ok {
 			t.term = term
-			// Resize existing terminal to FAKE height
-			t.term.Resize(width, fakeHeight)
 		} else {
-			// Create terminal with FAKE dimensions
-			t.term = NewAnsiTerminal(width, fakeHeight)
+			t.term = NewDeferredAnsiTerminal()
 			t.terminals[ptyFile] = t.term
+		}
+		// Only size/activate when the geometry is real; otherwise keep deferred.
+		if laidOut {
+			t.term.Activate(width, fakeHeight)
 		}
 
 		// Set response callback to write to PTY
@@ -257,8 +260,14 @@ func (t *TerminalView) SetPty(ptyFile *os.File) {
 // it — stalling startup (readiness probes never pass) and shutdown.
 //
 // It is idempotent: the activeReaders guard prevents a second reader, including
-// when SetPty/Draw later focus an already-draining pane. The per-PTY terminal
-// is created at the PTY's initial size; SetPty/Draw resize it once focused.
+// when SetPty/Draw later focus an already-draining pane.
+//
+// The per-PTY terminal is created deferred: it buffers output until the pane
+// width is known rather than parsing it at the 80-column default and baking that
+// wrapping into history, which AnsiTerminal.Resize cannot reflow (#512). If the
+// pane is already laid out it is activated immediately at the real width;
+// otherwise SetPty/Draw activate it once the layout is known. Draining itself is
+// never deferred, so an unfocused PTY is still emptied (#508).
 func (t *TerminalView) EnsureDraining(ptyFile *os.File) {
 	if ptyFile == nil {
 		return
@@ -270,19 +279,43 @@ func (t *TerminalView) EnsureDraining(ptyFile *os.File) {
 	}
 	term, ok := t.terminals[ptyFile]
 	if !ok {
-		term = NewAnsiTerminal(80, 24)
+		term = NewDeferredAnsiTerminal()
 		t.terminals[ptyFile] = term
 		term.SetResponseCallback(func(data []byte) {
 			if _, err := ptyFile.Write(data); err != nil {
 				log.Error().Err(err).Msg("Failed to write response to PTY")
 			}
 		})
+		// Activate now only if the pane width is already known; otherwise the
+		// terminal stays deferred and the first real layout (SetPty/Draw)
+		// activates it at the correct width.
+		if width, height, laidOut := t.paneSize(); laidOut {
+			term.Activate(width, height)
+			if err := pty.Setsize(ptyFile, &pty.Winsize{
+				Rows: uint16(height),
+				Cols: uint16(width),
+			}); err != nil {
+				log.Error().Err(err).Msg("Failed to set initial PTY size")
+			}
+		}
 	}
 	t.activeReaders[ptyFile] = true
 	// Release the lock before starting the goroutine, mirroring Draw().
 	t.lock.Unlock()
 
 	go t.readPty(ptyFile, term)
+}
+
+// paneSize returns the current inner pane dimensions and whether the view has
+// been laid out yet. Dimensions that are missing or implausibly small mean the
+// box has no real geometry (e.g. before the first draw), so callers must not
+// treat them as a real width.
+func (t *TerminalView) paneSize() (width, height int, laidOut bool) {
+	_, _, width, height = t.GetInnerRect()
+	if width < 20 || height < 10 {
+		return 0, 0, false
+	}
+	return width, height, true
 }
 
 func (t *TerminalView) readPty(ptyFile *os.File, term *AnsiTerminal) {
@@ -357,11 +390,14 @@ func (t *TerminalView) Draw(screen tcell.Screen) {
 		return
 	}
 
-	// Check if resize is needed BEFORE updating stored dimensions
-	if width != t.width || height != t.height {
+	// Resize (or first-time activate) BEFORE updating stored dimensions. A
+	// deferred terminal must be activated here even when the size already
+	// matches, so output buffered before the pane was laid out is replayed at
+	// the real width instead of staying buffered (#512).
+	if width != t.width || height != t.height || t.term.IsDeferred() {
 		t.width = width
 		t.height = height
-		t.term.Resize(width, height)
+		t.term.Activate(width, height)
 		if t.pty != nil {
 			err := pty.Setsize(t.pty, &pty.Winsize{
 				Rows: uint16(height),

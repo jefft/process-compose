@@ -1,0 +1,6 @@
+version: "0.5"
+
+processes:
+  interactive:
+    command: "sh -c 'while true; do printf \"%s\\n\" \"$(seq -s X 200 | tr -d 0-9)\"; sleep 1; done'"
+    is_interactive: true

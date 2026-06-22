@@ -47,6 +47,7 @@ type AnsiTerminal struct {
 	// Parser state
 	parseState       int
 	escapeSeq        bytes.Buffer
+	csiIntermediate  byte // Last CSI intermediate byte (0x20-0x2F), 0 if none
 	expectingCharSet bool // For ESC ( B sequences
 	latentWrap       bool // Pending wrap state
 	utf8Buffer       []byte
@@ -73,7 +74,21 @@ type AnsiTerminal struct {
 	lastWriteNano      atomic.Int64
 	totalLinesScrolled int          // total lines ever scrolled into history (not capped by historySize)
 	maxLogicalLine     atomic.Int64 // max(totalLinesScrolled + cursorY) — only grows on real new output
+
+	// Deferred parsing: a terminal created before the TUI pane is laid out does
+	// not yet know its real width. Parsing output now would wrap it at the 80
+	// column default and bake that into history (Resize cannot reflow it, #512).
+	// While deferred, Write only buffers the raw bytes (so the PTY is still
+	// drained — see #508); Activate then sizes the grid and replays them.
+	deferred   bool
+	pendingRaw []byte
 }
+
+// maxPendingRaw caps the raw bytes buffered before a deferred terminal is
+// activated, so a flooding process that is never shown cannot grow it without
+// bound. The most recent bytes are kept; older pre-display output is the least
+// useful and the on-screen history is bounded anyway.
+const maxPendingRaw = 1 << 20 // 1 MiB
 
 const (
 	stateNormal = iota
@@ -107,6 +122,15 @@ func NewAnsiTerminal(width, height int) *AnsiTerminal {
 	return t
 }
 
+// NewDeferredAnsiTerminal creates a terminal that buffers output instead of
+// parsing it until Activate is called with the real pane dimensions (#512). The
+// initial size is a placeholder and is overwritten by Activate.
+func NewDeferredAnsiTerminal() *AnsiTerminal {
+	t := NewAnsiTerminal(80, 24)
+	t.deferred = true
+	return t
+}
+
 // SetResponseCallback sets the callback for sending responses back to the PTY
 func (t *AnsiTerminal) SetResponseCallback(callback func([]byte)) {
 	t.lock.Lock()
@@ -118,7 +142,38 @@ func (t *AnsiTerminal) SetResponseCallback(callback func([]byte)) {
 func (t *AnsiTerminal) Resize(width, height int) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
+	t.resizeLocked(width, height)
+}
 
+// IsDeferred reports whether the terminal is still buffering output instead of
+// parsing it (i.e. Activate has not been called yet).
+func (t *AnsiTerminal) IsDeferred() bool {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	return t.deferred
+}
+
+// Activate sizes a deferred terminal to its first real dimensions and replays
+// any buffered output into the now correctly sized grid. For an already active
+// terminal it is equivalent to Resize. The resize and replay happen under a
+// single lock so live writes cannot interleave ahead of the buffered bytes.
+func (t *AnsiTerminal) Activate(width, height int) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	if !t.deferred {
+		t.resizeLocked(width, height)
+		return
+	}
+	t.deferred = false
+	t.resizeLocked(width, height)
+	if len(t.pendingRaw) > 0 {
+		pending := t.pendingRaw
+		t.pendingRaw = nil
+		t.writeLocked(pending)
+	}
+}
+
+func (t *AnsiTerminal) resizeLocked(width, height int) {
 	if width == t.width && height == t.height {
 		return
 	}
@@ -178,11 +233,32 @@ func (t *AnsiTerminal) Resize(width, height int) {
 	t.scrollBottom = height - 1
 }
 
-// Write processes incoming data and updates terminal state
+// Write processes incoming data and updates terminal state. While the terminal
+// is deferred (created before the pane was laid out) the bytes are only buffered
+// so the PTY is still drained; Activate replays them once the size is known.
 func (t *AnsiTerminal) Write(data []byte) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
+	if t.deferred {
+		t.bufferPendingLocked(data)
+		return
+	}
+	t.writeLocked(data)
+}
 
+func (t *AnsiTerminal) bufferPendingLocked(data []byte) {
+	t.lastWriteNano.Store(time.Now().UnixNano())
+	t.pendingRaw = append(t.pendingRaw, data...)
+	if len(t.pendingRaw) > maxPendingRaw {
+		// Keep only the most recent bytes, copied into a fresh slice so the
+		// large backing array is released.
+		trimmed := make([]byte, maxPendingRaw)
+		copy(trimmed, t.pendingRaw[len(t.pendingRaw)-maxPendingRaw:])
+		t.pendingRaw = trimmed
+	}
+}
+
+func (t *AnsiTerminal) writeLocked(data []byte) {
 	for _, b := range data {
 		if t.parseState == stateNormal {
 			// Handle UTF-8 buffering
@@ -260,6 +336,7 @@ func (t *AnsiTerminal) handleEscape(b byte) {
 	case '[':
 		t.parseState = stateCSI
 		t.escapeSeq.Reset()
+		t.csiIntermediate = 0
 	case '7':
 		// Save cursor (ESC 7)
 		t.saveCursor()
@@ -312,12 +389,31 @@ func (t *AnsiTerminal) handleEscape(b byte) {
 }
 
 func (t *AnsiTerminal) handleCSI(b byte) {
-	if b >= '0' && b <= '9' || b == ';' || b == '?' {
+	switch {
+	case b >= 0x30 && b <= 0x3f:
+		// Parameter bytes: 0-9 : ; < = > ?
 		t.escapeSeq.WriteByte(b)
-	} else {
-		// Terminal byte for CSI sequence
-		t.executeCSI(b)
+	case b >= 0x20 && b <= 0x2f:
+		// Intermediate bytes: space ! " # $ % & ' ( ) * + , - . /
+		// These precede the final byte and must NOT be treated as it. Missing
+		// this caused DECSCUSR (ESC [ <n> SP q, used by helix to set the cursor
+		// shape) to end the sequence at the space, then print the trailing 'q'
+		// as a literal character.
+		t.csiIntermediate = b
+	case b >= 0x40 && b <= 0x7e:
+		// Final byte. We implement no intermediate-prefixed CSI commands, so
+		// when an intermediate was seen just consume the sequence; otherwise
+		// dispatch it.
+		if t.csiIntermediate == 0 {
+			t.executeCSI(b)
+		}
 		t.parseState = stateNormal
+		t.csiIntermediate = 0
+	default:
+		// Anything else (e.g. a stray control byte) aborts the sequence without
+		// printing it.
+		t.parseState = stateNormal
+		t.csiIntermediate = 0
 	}
 }
 

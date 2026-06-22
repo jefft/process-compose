@@ -84,3 +84,55 @@ func TestEnsureDrainingUnblocksUnfocusedPty(t *testing.T) {
 		t.Fatalf("EnsureDraining is not idempotent: active readers went from %d to %d", readers, readersAfter)
 	}
 }
+
+// TestEnsureDrainingSizesEmulatorToPane is a regression test for issue #512.
+//
+// The child process just writes raw bytes; this terminal's emulator performs
+// the line wrapping. If the emulator is created at the default 80 columns,
+// output produced before the pane is focused/resized gets wrapped at 80 and
+// baked into history — AnsiTerminal.Resize does not reflow it afterwards, so it
+// stays mis-wrapped until enough new lines scroll it off ("fixes itself after a
+// couple of lines"). EnsureDraining must size the emulator (and the PTY) to the
+// actual pane width so output is wrapped correctly from the first line.
+func TestEnsureDrainingSizesEmulatorToPane(t *testing.T) {
+	ptmx, tty, err := pty.Open() // ptmx = master (read by the TUI), tty = slave (process stdout)
+	if err != nil {
+		t.Fatalf("failed to open pty: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = tty.Close()
+		_ = ptmx.Close()
+	})
+
+	tv := NewTerminalView(tview.NewApplication())
+	// Lay the pane out wider than the 80-column default. The box has a border,
+	// so the inner (usable) size is the outer size minus 1 on each side.
+	const innerWidth, innerHeight = 120, 30
+	tv.SetRect(0, 0, innerWidth+2, innerHeight+2)
+
+	tv.EnsureDraining(ptmx)
+
+	tv.lock.Lock()
+	term, ok := tv.terminals[ptmx]
+	tv.lock.Unlock()
+	if !ok {
+		t.Fatal("EnsureDraining did not create a terminal for the PTY")
+	}
+
+	term.lock.Lock()
+	gotWidth := term.width
+	term.lock.Unlock()
+	if gotWidth != innerWidth {
+		t.Fatalf("emulator width = %d, want pane width %d (issue #512)", gotWidth, innerWidth)
+	}
+
+	// The PTY winsize must match too, so curses apps started while the pane is
+	// unfocused query the right size instead of the 80x24 default.
+	_, cols, err := pty.Getsize(ptmx)
+	if err != nil {
+		t.Fatalf("failed to get pty size: %v", err)
+	}
+	if cols != innerWidth {
+		t.Fatalf("pty cols = %d, want %d (issue #512)", cols, innerWidth)
+	}
+}

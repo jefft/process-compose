@@ -1044,6 +1044,9 @@ func (p *Process) printDetails(details map[string]string, err, source string) {
 		Str("error", err).
 		Int("exit_code", exitCode).
 		Msgf("%s %s probe failed", p.getName(), source)
+	if cmd := details["command"]; cmd != "" {
+		log.Debug().Msgf("%s %s probe command: %s", p.getName(), source, cmd)
+	}
 	if output != "" {
 		log.Debug().Msgf("%s %s failed with output: %s", p.getName(), source, output)
 	}

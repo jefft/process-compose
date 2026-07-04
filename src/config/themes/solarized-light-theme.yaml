@@ -1,0 +1,36 @@
+style:
+  name: "Solarized Light"
+  body:
+    fgColor: '#657b83'          # base00
+    bgColor: '#fdf6e3'          # base3
+    secondaryTextColor: '#b58900'  # yellow
+    tertiaryTextColor: '#2aa198'   # cyan
+    borderColor: '#93a1a1'      # base1
+  stat_table:
+    keyFgColor: '#b58900'       # yellow
+    valueFgColor: '#586e75'     # base01
+    logoColor: '#268bd2'        # blue
+  proc_table:
+    fgColor: '#268bd2'          # blue
+    fgWarning: '#cb4b16'        # orange
+    fgPending: '#93a1a1'        # base1
+    fgCompleted: '#859900'      # green
+    fgError: '#dc322f'          # red
+    headerFgColor: '#b58900'    # yellow
+  help:
+    fgColor: '#657b83'          # base00
+    keyColor: '#b58900'         # yellow
+    hlColor: '#eee8d5'          # base2
+    categoryFgColor: '#6c71c4'  # violet
+  dialog:
+    fgColor: '#586e75'          # base01
+    bgColor: '#eee8d5'          # base2
+    contrastBgColor: '#268bd2'  # blue
+    attentionBgColor: '#dc322f' # red
+    buttonFgColor: '#fdf6e3'    # base3
+    buttonBgColor: '#268bd2'    # blue
+    buttonFocusFgColor: '#fdf6e3'
+    buttonFocusBgColor: '#2aa198'  # cyan
+    labelFgColor: '#b58900'     # yellow
+    fieldFgColor: '#586e75'     # base01
+    fieldBgColor: '#eee8d5'     # base2

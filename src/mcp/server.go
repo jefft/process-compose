@@ -2,10 +2,13 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	stdLog "log"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/f1bonacc1/process-compose/src/types"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -43,6 +46,8 @@ type Server struct {
 	cancel         context.CancelFunc
 	stdin          io.Reader
 	stdout         io.Writer
+	httpServer     *http.Server
+	sseServer      *server.SSEServer
 }
 
 // NewServer creates a new MCP server instance
@@ -205,12 +210,21 @@ func (s *Server) startSSE() error {
 		Str("address", addr).
 		Msg("Starting MCP server with SSE transport")
 
-	// Create SSE server
+	// Create SSE server. It is served through our own http.Server so we can
+	// wrap it with a Host/Origin/auth trust boundary (see sseSecurityMiddleware)
+	// that guards against browser DNS-rebinding attacks. No WithSSECORS is used:
+	// the middleware gate makes the library's default ACAO:* header moot.
 	sseServer := server.NewSSEServer(s.mcpServer)
+	s.sseServer = sseServer
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: s.sseSecurityMiddleware(sseServer),
+	}
+	s.warnInsecureSSE()
 
 	// SSE transport blocks, so run in goroutine
 	go func() {
-		if err := sseServer.Start(addr); err != nil {
+		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error().Err(err).Msg("MCP SSE server error")
 		}
 	}()
@@ -222,6 +236,18 @@ func (s *Server) startSSE() error {
 func (s *Server) Stop() error {
 	log.Info().Msg("Stopping MCP server")
 	s.cancel()
+	if s.httpServer != nil {
+		// Drop long-lived SSE connections first so Shutdown can return, then
+		// shut down the listener within a bounded timeout.
+		if s.sseServer != nil {
+			s.sseServer.CloseSessions()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("MCP SSE server shutdown error")
+		}
+	}
 	return nil
 }
 

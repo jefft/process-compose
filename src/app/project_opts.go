@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/f1bonacc1/process-compose/src/admitter"
 	"github.com/f1bonacc1/process-compose/src/types"
 	"time"
 )
@@ -17,6 +18,7 @@ type ProjectOpts struct {
 	truncateLogs         bool
 	refRate              time.Duration
 	withRecursiveMetrics bool
+	admitters            []admitter.Admitter
 }
 
 func (p *ProjectOpts) WithProject(project *types.Project) *ProjectOpts {
@@ -70,5 +72,12 @@ func (p *ProjectOpts) WithSlowRefRate(refRate time.Duration) *ProjectOpts {
 
 func (p *ProjectOpts) WithRecursiveMetrics(withRecursiveMetrics bool) *ProjectOpts {
 	p.withRecursiveMetrics = withRecursiveMetrics
+	return p
+}
+
+// WithAdmitters keeps the load-time admission policies (e.g. --namespace)
+// so they can be re-applied when the project is reloaded or updated.
+func (p *ProjectOpts) WithAdmitters(admitters ...admitter.Admitter) *ProjectOpts {
+	p.admitters = admitters
 	return p
 }

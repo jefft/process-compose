@@ -24,6 +24,10 @@ func (o *LoaderOptions) AddAdmitter(adm ...admitter.Admitter) {
 	o.admitters = append(o.admitters, adm...)
 }
 
+func (o *LoaderOptions) GetAdmitters() []admitter.Admitter {
+	return o.admitters
+}
+
 func (o *LoaderOptions) getWorkingDir() (string, error) {
 	if o.workingDir != "" {
 		return o.workingDir, nil

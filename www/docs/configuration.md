@@ -491,6 +491,8 @@ process-compose -n ns1 -n ns3
 # will start only ns1 and ns3. ns2 namespace won't run and won't be visible in the TUI
 ```
 
+If a process in a selected namespace `depends_on` a process from a namespace that was not selected, that dependency is pruned: the process starts without waiting for its excluded dependency (a warning is logged at startup). This makes it possible to start a subset of the stack when its dependencies are already running elsewhere.
+
 ### Namespace Operations
 
 You can perform bulk operations on namespaces using the CLI or TUI.

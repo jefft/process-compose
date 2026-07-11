@@ -90,3 +90,44 @@ func TestNamespaceAdmitter_Admit(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyToProject(t *testing.T) {
+	project := &types.Project{
+		Processes: types.Processes{
+			"p1": {Name: "p1", ReplicaName: "p1", Namespace: "ns1",
+				DependsOn: types.DependsOnConfig{"p2": {}, "p3": {}}},
+			"p2": {Name: "p2", ReplicaName: "p2", Namespace: "ns2"},
+			"p3": {Name: "p3", ReplicaName: "p3", Namespace: "ns1"},
+		},
+	}
+	ApplyToProject(project, []Admitter{&NamespaceAdmitter{EnabledNamespaces: []string{"ns1"}}})
+
+	if _, ok := project.Processes["p2"]; ok {
+		t.Error("excluded process should be removed from the project")
+	}
+	p1 := project.Processes["p1"]
+	if _, ok := p1.DependsOn["p2"]; ok {
+		t.Error("dependency on the excluded process should be pruned")
+	}
+	if _, ok := p1.DependsOn["p3"]; !ok {
+		t.Error("dependency on an admitted process should be kept")
+	}
+}
+
+func TestApplyToProject_NoAdmittersKeepsProjectIntact(t *testing.T) {
+	project := &types.Project{
+		Processes: types.Processes{
+			"p1": {Name: "p1", ReplicaName: "p1", Namespace: "ns1",
+				DependsOn: types.DependsOnConfig{"p2": {}}},
+			"p2": {Name: "p2", ReplicaName: "p2", Namespace: "ns2"},
+		},
+	}
+	ApplyToProject(project, nil)
+
+	if len(project.Processes) != 2 {
+		t.Errorf("without admitters no process should be removed, got %d", len(project.Processes))
+	}
+	if _, ok := project.Processes["p1"].DependsOn["p2"]; !ok {
+		t.Error("without admitters no dependency should be pruned")
+	}
+}

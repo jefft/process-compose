@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/f1bonacc1/process-compose/src/admitter"
 	"github.com/f1bonacc1/process-compose/src/command"
 	"github.com/f1bonacc1/process-compose/src/config"
 	"github.com/f1bonacc1/process-compose/src/health"
@@ -68,6 +69,7 @@ type ProjectRunner struct {
 	processTree          *ProcessTree
 	processScheduler     atomic.Pointer[scheduler.Scheduler]
 	stateBroadcaster     *ProcessStateBroadcaster
+	admitters            []admitter.Admitter
 }
 
 // RestartCall represents an in-flight restart operation
@@ -1343,6 +1345,7 @@ func NewProjectRunner(opts *ProjectOpts) (*ProjectRunner, error) {
 	}
 	runner := &ProjectRunner{
 		project:              opts.project,
+		admitters:            opts.admitters,
 		mainProcess:          opts.mainProcess,
 		mainProcessArgs:      opts.mainProcessArgs,
 		isTuiOn:              opts.isTuiOn,
@@ -1382,6 +1385,9 @@ func NewProjectRunner(opts *ProjectOpts) (*ProjectRunner, error) {
 }
 
 func (p *ProjectRunner) UpdateProject(project *types.Project) (map[string]string, error) {
+	// Re-apply the load-time admission policies (e.g. --namespace) so that
+	// excluded processes don't get resurrected by a project reload or update.
+	admitter.ApplyToProject(project, p.admitters)
 	newProcs := make(map[string]types.ProcessConfig)
 	delProcs := make(map[string]types.ProcessConfig)
 	updatedProcs := make(map[string]types.ProcessConfig)

@@ -1,0 +1,17 @@
+version: "0.5"
+
+processes:
+  foo:
+    command: "echo foo"
+    namespace: "foo"
+    depends_on:
+      bar:
+        condition: process_completed_successfully
+
+  foo_helper:
+    command: "echo foo_helper"
+    namespace: "foo"
+
+  bar:
+    command: "echo bar"
+    namespace: "bar"

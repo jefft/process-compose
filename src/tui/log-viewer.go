@@ -20,9 +20,12 @@ var (
 	// Clear entire screen sequences
 	clearScreenPattern = regexp.MustCompile(`\x1b\[2J|\x1bc|\x1b\[H\x1b\[2J`)
 	// tviewTagPattern matches patterns that tview's parseTag actually interprets
-	// as style/region tags. Unlike tview.Escape's regex, this excludes spaces,
-	// underscores, and other characters that parseTag rejects.
-	tviewTagPattern = regexp.MustCompile(`(\[[a-zA-Z0-9#:\-"]+\[*)\]`)
+	// as style or region tags. The first alternative matches region tags
+	// (["name"]) whose quoted names may contain `_,;: -.` in addition to
+	// alphanumerics. The second matches style tags; unlike tview.Escape's
+	// regex, it excludes spaces, underscores, and other characters that
+	// parseTag rejects in that position.
+	tviewTagPattern = regexp.MustCompile(`(\[(?:"[a-zA-Z0-9_,;: \-\.]*"|[a-zA-Z0-9#:\-"]+)\[*)\]`)
 )
 
 type truncator interface {

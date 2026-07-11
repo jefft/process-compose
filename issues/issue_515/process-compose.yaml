@@ -1,0 +1,5 @@
+processes:
+  repro:
+    command: |
+      echo '{"msg": "handled request", "headers": {"X-Forwarded-Host": ["example.com"]}}'
+      sleep 999999

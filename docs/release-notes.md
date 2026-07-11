@@ -1,10 +1,24 @@
 # Release Notes
 
-## [Unreleased]
+## [v1.120.0] - 2026-07-11
+
+### New Features
+
+- Added [Solarized Dark and Solarized Light](https://f1bonacc1.github.io/process-compose/tui/#tui-themes) TUI themes, by Danial Pearce.
+- Added pruning of cross-namespace dependencies: when running a subset of [namespaces](https://f1bonacc1.github.io/process-compose/configuration/#namespaces), a `depends_on` reference to a process from an unselected namespace is dropped (with a warning) so the selected processes can start, and the namespace selection now persists across project updates and reloads instead of resurrecting excluded processes, addresses issue #517.
+- Added debug logging of the exec probe command during health checks - once when probing starts and on probe failures, addresses issue #454.
+- Added a notice when requesting CLI logs for an [interactive process](https://f1bonacc1.github.io/process-compose/interactive-processes/#attaching-to-a-process), whose PTY-rendered output is not captured in the log buffer, addresses issue #511.
+
+### Bug Fixes
+
+- Fixed the TUI log viewer mangling log lines containing bracketed text with punctuation or spaces, which was misinterpreted as tview region tags, addresses issue #515.
+- Fixed incorrect line wrapping of interactive process output by deferring terminal initialization until the TUI layout is settled and the pane size is known, addresses issue #512.
 
 ### Security Fixes
 
 - Fixed a DNS-rebinding vulnerability (GHSA-5gm3-9crp-6g3v) in the [MCP SSE transport](https://f1bonacc1.github.io/process-compose/mcp-server/#sse-transport-security): the SSE listener now validates the `Host` and `Origin` headers (loopback plus optional `trusted_hosts`) and, when an API token is configured, enforces it via `X-PC-Token-Key` or `Authorization: Bearer` before dispatching any MCP request.
+
+---
 
 ## [v1.116.0] - 2026-06-16
 

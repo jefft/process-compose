@@ -176,6 +176,12 @@
         },
         "expose_control_tools": {
           "type": "boolean"
+        },
+        "trusted_hosts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "type": "object"

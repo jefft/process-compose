@@ -1,5 +1,11 @@
 # Release Notes
 
+## [Unreleased]
+
+### Security Fixes
+
+- Fixed a DNS-rebinding vulnerability (GHSA-5gm3-9crp-6g3v) in the [MCP SSE transport](https://f1bonacc1.github.io/process-compose/mcp-server/#sse-transport-security): the SSE listener now validates the `Host` and `Origin` headers (loopback plus optional `trusted_hosts`) and, when an API token is configured, enforces it via `X-PC-Token-Key` or `Authorization: Bearer` before dispatching any MCP request.
+
 ## [v1.116.0] - 2026-06-16
 
 ### New Features

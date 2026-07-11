@@ -26,6 +26,8 @@ mcp_server:
   port: 3000                   # Required: port to listen on (ignored for stdio)
   # transport: sse             # Optional: defaults to "sse". Supported: "sse", "stdio"
   # expose_control_tools: true # Optional: expose built-in pc_* control tools (default false)
+  # trusted_hosts:             # Optional (SSE only): extra Host/Origin names to trust in
+  #   - my-dev-box.local       #   addition to loopback. Use ["*"] to disable the check.
 ```
 
 > :bulb: **Both SSE and Stdio transports are supported.** The transport defaults to SSE when not specified, making it optional in your configuration.
@@ -259,6 +261,35 @@ The `pc_` prefix avoids collisions with user-defined tools — it is safe to hav
 The MCP server can host both kinds of tools at once — user-defined process tools (from per-process `mcp:` blocks) and the built-in `pc_*` control tools.
 
 `pc_process_logs_search` caps total work at 50,000 log lines per call. When `log_limit × <process count>` would exceed that, each process's budget is reduced to a fair share (most-recent lines kept) and the response includes `"truncated": true`.
+
+## SSE Transport Security
+
+The SSE transport is an HTTP listener, which makes it reachable from a web browser. To protect against **DNS-rebinding** attacks — where a malicious web page re-resolves its own hostname to `127.0.0.1` and drives your local MCP listener — the SSE listener enforces a trust boundary on every request, **before** any MCP dispatch:
+
+1. **Host validation.** The request `Host` header must be a loopback address (`127.0.0.0/8`, `::1`, or `localhost`) or an explicitly trusted host (see `trusted_hosts`). A browser cannot forge the `Host` header, so this is the primary defense.
+2. **Origin validation.** If an `Origin` header is present (i.e. a browser request), its host must satisfy the same allowlist.
+3. **Optional token.** If an API token is configured (`PC_API_TOKEN` or `--token-file`), it is also required on the SSE listener. Supply it via the `X-PC-Token-Key` header **or** `Authorization: Bearer <token>`.
+
+Requests that fail Host/Origin validation get `403 Forbidden`; requests that fail token validation get `401 Unauthorized`. The `stdio` transport is not network-reachable and is unaffected.
+
+Loopback MCP clients (Claude Desktop, MCP Inspector, `mcp-remote`, etc.) pointed at `http://127.0.0.1:<port>/sse` or `http://localhost:<port>/sse` continue to work with no configuration.
+
+### Trusting non-loopback hosts
+
+If you intentionally bind the SSE listener to a non-loopback address and connect to it by name or IP, add that host to `trusted_hosts`:
+
+```yaml
+mcp_server:
+  host: 0.0.0.0
+  port: 3000
+  trusted_hosts:
+    - my-dev-box.local
+    - 192.168.1.20
+```
+
+Set `trusted_hosts: ["*"]` to disable Host/Origin validation entirely. This re-exposes the DNS-rebinding surface — only use it on instances you fully trust, and prefer configuring a `PC_API_TOKEN` alongside it.
+
+> :warning: When `expose_control_tools: true` is set without an API token, Process Compose logs a startup warning. Host/Origin validation still blocks browser-driven attacks, but configuring `PC_API_TOKEN` is strongly recommended for any listener that may be reached over a network.
 
 ## Complete Examples
 

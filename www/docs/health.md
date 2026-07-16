@@ -69,9 +69,13 @@ Probes have a number of fields that you can use to control the behavior of liven
 
 - `initial_delay_seconds`: Number of seconds after the container has started before liveness or readiness probes are initiated. Defaults to 0 seconds. The minimum value is 0.
 - `period_seconds`: How often (in seconds) to perform the probe. Defaults to 10 seconds. The minimum value is 1.
+- `startup_period_seconds`: How often (in seconds) to perform the probe until it first succeeds. This allows faster detection of readiness for quick-starting processes while keeping a longer steady-state `period_seconds` afterwards. Defaults to 1 second. The minimum value is 1.
+- `unhealthy_period_seconds`: How often (in seconds) to perform the probe while the process is unhealthy, after it had previously become healthy. This allows faster detection of recovery. Defaults to `period_seconds`. The minimum value is 1.
 - `timeout_seconds`: Number of seconds after which the probe times out. Defaults to 1 second. The minimum value is 1.
 - `success_threshold`: Minimum consecutive successes for the probe to be considered successful after failing. Defaults to 1. Must be 1 for liveness and startup Probes. The minimum value is 1. **Note**: this value is not respected and was added as a placeholder for future implementation.
 - `failure_threshold`: When a probe fails, Process Compose will try `failure_threshold` times before giving up. Giving up in case of readiness probe means restarting the process. In case of liveness probe and `is_daemon` set to `true` the daemon will be considered stopped. Process Compose will follow the availability configuration to decide if restart is needed.  Defaults to 3. The minimum value is 1.
+
+    `failure_threshold` counts attempts at the `period_seconds` cadence, so it defines a *duration* of `(failure_threshold - 1) × period_seconds` rather than a raw number of probes. When a phase polls faster than `period_seconds`, the number of attempts is scaled up to cover that same duration. With the defaults (`period_seconds: 10`, `failure_threshold: 3`, `startup_period_seconds: 1`) a starting process is probed every second but is only given up on after 20 seconds, on the 21st failure — the same deadline it would get at the slower cadence. Phases polling slower than `period_seconds` keep the raw count, and so are given longer.
 
 ## Auto Restart if not Healthy
 

@@ -194,6 +194,12 @@
         "period_seconds": {
           "type": "integer"
         },
+        "startup_period_seconds": {
+          "type": "integer"
+        },
+        "unhealthy_period_seconds": {
+          "type": "integer"
+        },
         "timeout_seconds": {
           "type": "integer"
         },

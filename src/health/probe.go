@@ -9,13 +9,15 @@ import (
 )
 
 type Probe struct {
-	Exec             *ExecProbe `yaml:"exec,omitempty" json:"exec,omitempty"`
-	HttpGet          *HttpProbe `yaml:"http_get,omitempty" json:"httpGet,omitempty"`
-	InitialDelay     int        `yaml:"initial_delay_seconds,omitempty" json:"initialDelay,omitempty"`
-	PeriodSeconds    int        `yaml:"period_seconds,omitempty" json:"periodSeconds,omitempty"`
-	TimeoutSeconds   int        `yaml:"timeout_seconds,omitempty" json:"timeoutSeconds,omitempty"`
-	SuccessThreshold int        `yaml:"success_threshold,omitempty" json:"successThreshold,omitempty"`
-	FailureThreshold int        `yaml:"failure_threshold,omitempty" json:"failureThreshold,omitempty"`
+	Exec                   *ExecProbe `yaml:"exec,omitempty" json:"exec,omitempty"`
+	HttpGet                *HttpProbe `yaml:"http_get,omitempty" json:"httpGet,omitempty"`
+	InitialDelay           int        `yaml:"initial_delay_seconds,omitempty" json:"initialDelay,omitempty"`
+	PeriodSeconds          int        `yaml:"period_seconds,omitempty" json:"periodSeconds,omitempty"`
+	StartupPeriodSeconds   int        `yaml:"startup_period_seconds,omitempty" json:"startupPeriodSeconds,omitempty"`
+	UnhealthyPeriodSeconds int        `yaml:"unhealthy_period_seconds,omitempty" json:"unhealthyPeriodSeconds,omitempty"`
+	TimeoutSeconds         int        `yaml:"timeout_seconds,omitempty" json:"timeoutSeconds,omitempty"`
+	SuccessThreshold       int        `yaml:"success_threshold,omitempty" json:"successThreshold,omitempty"`
+	FailureThreshold       int        `yaml:"failure_threshold,omitempty" json:"failureThreshold,omitempty"`
 }
 
 type ExecProbe struct {
@@ -50,6 +52,12 @@ func (p *Probe) ValidateAndSetDefaults() {
 	}
 	if p.PeriodSeconds < 1 {
 		p.PeriodSeconds = 10
+	}
+	if p.StartupPeriodSeconds < 1 {
+		p.StartupPeriodSeconds = 1
+	}
+	if p.UnhealthyPeriodSeconds < 1 {
+		p.UnhealthyPeriodSeconds = p.PeriodSeconds
 	}
 	if p.TimeoutSeconds < 1 {
 		p.TimeoutSeconds = 1

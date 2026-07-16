@@ -1,10 +1,9 @@
 package health
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/f1bonacc1/go-health/v2"
@@ -14,17 +13,27 @@ import (
 )
 
 const (
-	OK = "ok"
+	OK     = "ok"
+	failed = "failed"
 )
 
 type Prober struct {
 	probe          Probe
 	name           string
 	onCheckEndFunc func(bool, bool, string, any)
-	hc             *health.Health
-	stopped        atomic.Bool
 	env            []string
 	shellConfig    command.ShellConfig
+
+	checker health.ICheckable
+
+	// mu protects stopCh, stopped, and all health tracking fields.
+	mu                  sync.Mutex
+	stopCh              chan struct{}
+	stopped             bool
+	wasEverHealthy      bool
+	isHealthy           bool
+	consecutiveFailures int64
+	firstFailureTime    time.Time
 }
 
 func New(name string, probe Probe, env []string, shellConfig command.ShellConfig, onCheckEnd func(bool, bool, string, any)) (*Prober, error) {
@@ -33,78 +42,159 @@ func New(name string, probe Probe, env []string, shellConfig command.ShellConfig
 		probe:          probe,
 		name:           name,
 		onCheckEndFunc: onCheckEnd,
-		hc:             health.New(),
 		env:            env,
 		shellConfig:    shellConfig,
 	}
-	p.hc.DisableLogging()
+
+	var checker health.ICheckable
+	var err error
 	if probe.Exec != nil {
-		err := p.addProber(p.getExecChecker)
-		if err != nil {
-			return nil, err
-		}
-		return p, err
+		checker, err = p.getExecChecker()
+	} else if probe.HttpGet != nil {
+		checker, err = p.getHttpChecker()
+	} else {
+		return nil, fmt.Errorf("no probes [http_get, exec] configured for %s", name)
 	}
-	if probe.HttpGet != nil {
-		err := p.addProber(p.getHttpChecker)
-		if err != nil {
-			return nil, err
-		}
-		return p, err
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("no probes [http_get, exec] configured for %s", name)
+	p.checker = checker
+	return p, nil
 }
 
 func (p *Prober) Start() {
+	p.mu.Lock()
+	p.stopCh = make(chan struct{})
+	p.stopped = false
+	p.wasEverHealthy = false
+	p.isHealthy = false
+	p.consecutiveFailures = 0
+	p.firstFailureTime = time.Time{}
+	stopCh := p.stopCh // capture under lock for the goroutine
+	p.mu.Unlock()
+
 	go func() {
-		p.stopped.Store(false)
-		time.Sleep(time.Duration(p.probe.InitialDelay) * time.Second)
-		if p.stopped.Load() {
+		if p.probe.InitialDelay > 0 {
+			select {
+			case <-time.After(time.Duration(p.probe.InitialDelay) * time.Second):
+			case <-stopCh:
+				return
+			}
+		}
+
+		p.mu.Lock()
+		if p.stopped {
+			p.mu.Unlock()
 			return
 		}
-		err := p.hc.Start()
-		if err != nil && !errors.Is(err, health.ErrAlreadyRunning) {
-			log.Error().Err(err).Msgf("%s failed to start monitoring", p.name)
-			return
-		}
-		log.Debug().Msgf("%s started monitoring", p.name)
+		p.mu.Unlock()
+
+		p.runLoop(stopCh)
+		log.Debug().Msgf("%s stopped monitoring", p.name)
 	}()
+	log.Debug().Msgf("%s started monitoring", p.name)
 }
 
 func (p *Prober) Stop() {
-	if p.hc != nil {
-		_ = p.hc.Stop()
-		p.stopped.Store(true)
-	}
-}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-func (p *Prober) healthCheckCompleted(state *health.State) {
-	fatal := false
-	ok := false
-	if state.ContiguousFailures == int64(p.probe.FailureThreshold) {
-		fatal = true
-	}
-	if state.Status == OK {
-		ok = true
-	}
-	if p.stopped.Load() {
+	if p.stopped {
 		return
 	}
-	p.onCheckEndFunc(ok, fatal, state.Err, state.Details)
+	p.stopped = true
+	if p.stopCh != nil {
+		close(p.stopCh)
+	}
 }
 
-func (p *Prober) addProber(factory func() (health.ICheckable, error)) error {
-	checker, err := factory()
-	if err != nil {
-		return err
+// currentInterval returns the interval that should be used for the next wait
+// based on the probe's current health state. Caller must hold p.mu.
+func (p *Prober) currentInterval() time.Duration {
+	if !p.wasEverHealthy {
+		return time.Duration(p.probe.StartupPeriodSeconds) * time.Second
 	}
-	return p.hc.AddCheck(&health.Config{
-		Name:       p.name,
-		Checker:    checker,
-		Interval:   time.Duration(p.probe.PeriodSeconds) * time.Second,
-		Fatal:      false,
-		OnComplete: p.healthCheckCompleted,
-	})
+	if !p.isHealthy && p.probe.UnhealthyPeriodSeconds != p.probe.PeriodSeconds {
+		return time.Duration(p.probe.UnhealthyPeriodSeconds) * time.Second
+	}
+	return time.Duration(p.probe.PeriodSeconds) * time.Second
+}
+
+func (p *Prober) runLoop(stopCh chan struct{}) {
+	p.mu.Lock()
+	interval := p.currentInterval()
+	p.mu.Unlock()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Run first check immediately.
+	p.runCheck()
+
+	for {
+		select {
+		case <-ticker.C:
+			p.runCheck()
+			// After the check, recalculate interval for the next wait.
+			p.mu.Lock()
+			newInterval := p.currentInterval()
+			p.mu.Unlock()
+			if newInterval != interval {
+				ticker.Reset(newInterval)
+				interval = newInterval
+			}
+		case <-stopCh:
+			return
+		}
+	}
+}
+
+func (p *Prober) runCheck() {
+	data, err := p.checker.Status()
+
+	state := &health.State{
+		Name:      p.name,
+		Status:    OK,
+		Details:   data,
+		CheckTime: time.Now(),
+	}
+
+	isOk := true
+	if err != nil {
+		state.Status = failed
+		state.Err = err.Error()
+		isOk = false
+	}
+
+	// Track contiguous failures and state transitions.
+	p.mu.Lock()
+	if !isOk {
+		if p.firstFailureTime.IsZero() {
+			p.firstFailureTime = time.Now()
+		}
+		p.consecutiveFailures++
+		state.ContiguousFailures = p.consecutiveFailures
+		state.TimeOfFirstFailure = p.firstFailureTime
+	} else {
+		p.consecutiveFailures = 0
+		p.firstFailureTime = time.Time{}
+	}
+
+	consecutiveFailures := p.consecutiveFailures
+
+	if isOk {
+		p.wasEverHealthy = true
+		p.isHealthy = true
+	} else {
+		p.isHealthy = false
+	}
+	stopped := p.stopped
+	p.mu.Unlock()
+
+	fatal := consecutiveFailures >= int64(p.probe.FailureThreshold)
+
+	if !stopped {
+		p.onCheckEndFunc(isOk, fatal, state.Err, state.Details)
+	}
 }
 
 func (p *Prober) getHttpChecker() (health.ICheckable, error) {

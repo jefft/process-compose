@@ -578,6 +578,42 @@ func TestProcessConfigCompareSuccessExitCodes(t *testing.T) {
 	}
 }
 
+// TestProcessConfigCompareJSONDecodedNumbers pins that a process loaded from
+// YAML (whole numbers decode as int) equals the same process received over the
+// REST API (every number decodes as float64), while real value changes in vars
+// and extensions are still detected.
+func TestProcessConfigCompareJSONDecodedNumbers(t *testing.T) {
+	loaded := &ProcessConfig{
+		Name:       "p",
+		Vars:       Vars{"PC_REPLICA_NUM": 0, "PORT": 8080},
+		Extensions: map[string]any{"x-meta": map[string]any{"weight": 3}},
+	}
+	fromAPI := &ProcessConfig{
+		Name:       "p",
+		Vars:       Vars{"PC_REPLICA_NUM": float64(0), "PORT": float64(8080)},
+		Extensions: map[string]any{"x-meta": map[string]any{"weight": float64(3)}},
+	}
+	if !loaded.Compare(fromAPI) {
+		t.Errorf("Compare() = false for int vs float64 encodings of the same numbers, want true")
+	}
+
+	changedVar := *fromAPI
+	changedVar.Vars = Vars{"PC_REPLICA_NUM": float64(0), "PORT": float64(9090)}
+	if loaded.Compare(&changedVar) {
+		t.Errorf("Compare() = true for a changed var value, want false")
+	}
+	stringVar := *fromAPI
+	stringVar.Vars = Vars{"PC_REPLICA_NUM": float64(0), "PORT": "8080"}
+	if loaded.Compare(&stringVar) {
+		t.Errorf("Compare() = true for a var changed from number to string, want false")
+	}
+	changedExt := *fromAPI
+	changedExt.Extensions = map[string]any{"x-meta": map[string]any{"weight": float64(4)}}
+	if loaded.Compare(&changedExt) {
+		t.Errorf("Compare() = true for a changed extension value, want false")
+	}
+}
+
 func TestValidateProcessConfigSuccessExitCodes(t *testing.T) {
 	if err := (&ProcessConfig{Name: "p", SuccessExitCodes: []int{0, 130, 143, 255}}).ValidateProcessConfig(); err != nil {
 		t.Errorf("ValidateProcessConfig() unexpected error for valid codes: %v", err)

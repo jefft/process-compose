@@ -1971,6 +1971,86 @@ func TestReadinessProbeRestart(t *testing.T) {
 	p.waitForCompletion()
 }
 
+// TestStopTimeoutDoesNotKillRestartedInstance stops a process that exits
+// promptly on SIGTERM and is restarted before its shutdown timeout expires.
+// The SIGKILL fallback armed for the stopped instance must not fire at the
+// restarted one.
+func TestStopTimeoutDoesNotKillRestartedInstance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping on Windows: relies on SIGTERM/SIGKILL")
+	}
+	const shutdownTimeout = 2
+	proc := &types.ProcessConfig{
+		Name:        "test",
+		ReplicaName: "test",
+		Command:     getSleepCommand(30.0),
+		RestartPolicy: types.RestartPolicyConfig{
+			Restart:        types.RestartPolicyOnFailure,
+			BackoffSeconds: 1,
+		},
+		ShutDownParams: types.ShutDownParams{
+			Signal:          int(syscall.SIGTERM),
+			ShutDownTimeout: shutdownTimeout,
+		},
+	}
+	proc.AssignProcessExecutableAndArgs(command.DefaultShellConfig(), "")
+
+	p := NewProcess(
+		withProcConf(proc),
+		withLogger(pclog.NewNilLogger()),
+		withProcState(&types.ProcessState{}),
+		withProcLog(pclog.NewLogBuffer(100)),
+	)
+	go func() {
+		_ = p.run()
+	}()
+	defer func() {
+		_ = p.shutDown()
+		p.waitForCompletion()
+	}()
+
+	state := func() (restarts int, status string, pid int) {
+		p.getStateData(func(s *types.ProcessState) {
+			restarts, status, pid = s.Restarts, s.Status, s.Pid
+		})
+		return
+	}
+	waitFor := func(wantRestarts int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if r, s, _ := state(); r == wantRestarts && s == types.ProcessStateRunning {
+				return
+			}
+			if time.Now().After(deadline) {
+				r, s, _ := state()
+				t.Fatalf("waiting for running instance after %d restart(s): got %d restart(s), %s", wantRestarts, r, s)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	waitFor(0)
+	stopped := make(chan error, 1)
+	go func() { stopped <- p.internalStop() }()
+	waitFor(1)
+	_, _, pid := state()
+
+	// Outlive the shutdown timeout armed for the first instance.
+	time.Sleep(shutdownTimeout*time.Second + 500*time.Millisecond)
+	if r, s, newPid := state(); r != 1 || s != types.ProcessStateRunning || newPid != pid {
+		t.Fatalf("restarted instance was killed: restarts=%d status=%s pid %d -> %d", r, s, pid, newPid)
+	}
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Errorf("internalStop: %v", err)
+		}
+	default:
+		t.Error("internalStop still waiting after the stopped instance exited")
+	}
+}
+
 func getSleepCommand(seconds float64) string {
 	if runtime.GOOS == "windows" {
 		// ping -n is integer only, so we round up.

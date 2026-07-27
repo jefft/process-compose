@@ -207,11 +207,15 @@ func (p *Prober) getHttpChecker() (health.ICheckable, error) {
 		StatusCode: httpGet.StatusCode,
 	}
 
-	if len(httpGet.Headers) > 0 {
-		config.Headers = http.Header{}
-		for k, v := range httpGet.Headers {
-			config.Headers.Set(k, v)
-		}
+	// Always allocate: the probe identifies itself to the server by default.
+	config.Headers = http.Header{}
+	for k, v := range httpGet.Headers {
+		config.Headers.Set(k, v)
+	}
+	// Name the probe that is calling, but never override an explicitly
+	// configured agent - headers are user-supplied and win.
+	if config.Headers.Get("User-Agent") == "" {
+		config.Headers.Set("User-Agent", p.name)
 	}
 
 	checker, err := checkers.NewHTTP(config)

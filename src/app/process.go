@@ -37,27 +37,31 @@ const (
 
 type Process struct {
 	sync.Mutex
-	globalEnv            []string
-	procConf             *types.ProcessConfig
-	procState            *types.ProcessState
-	stateMtx             sync.Mutex
-	procCond             sync.Cond
-	procStartedChan      chan struct{}
-	procStateChan        chan string
-	procReadyCtx         context.Context
-	readyCancelFn        context.CancelFunc
-	procLogReadyCtx      context.Context
-	readyLogCancelFn     context.CancelCauseFunc
-	procRunCtx           context.Context
-	runCancelFn          context.CancelFunc
-	procDoneChan         chan struct{}
-	doneOnce             sync.Once
-	procTerminatedChan   chan struct{}
-	waitForPassCtx       context.Context
-	waitForPassCancelFn  context.CancelFunc
-	mtxStopFn            sync.Mutex
-	waitForStoppedCtx    context.Context
-	waitForStoppedFn     context.CancelFunc
+	globalEnv           []string
+	procConf            *types.ProcessConfig
+	procState           *types.ProcessState
+	stateMtx            sync.Mutex
+	procCond            sync.Cond
+	procStartedChan     chan struct{}
+	procStateChan       chan string
+	procReadyCtx        context.Context
+	readyCancelFn       context.CancelFunc
+	procLogReadyCtx     context.Context
+	readyLogCancelFn    context.CancelCauseFunc
+	procRunCtx          context.Context
+	runCancelFn         context.CancelFunc
+	procDoneChan        chan struct{}
+	doneOnce            sync.Once
+	procTerminatedChan  chan struct{}
+	waitForPassCtx      context.Context
+	waitForPassCancelFn context.CancelFunc
+	mtxStopFn           sync.Mutex
+	// instanceMtx guards instanceExited, which is replaced together with
+	// command for every (re)start and closed once that instance has exited
+	// (for daemons: once the daemon completed). A shutdown timeout waits on
+	// the channel of the instance it stops, so it can never kill a later one.
+	instanceMtx          sync.Mutex
+	instanceExited       chan struct{}
 	procColor            func(a ...any) string
 	noColor              func(a ...any) string
 	redColor             func(a ...any) string
@@ -163,6 +167,7 @@ loop:
 		if err != nil {
 			log.Error().Err(err).Msgf(`Failed to run command ["%v"] for process %s`, strings.Join(p.getCommand(), `" "`), p.getName())
 			p.logBuffer.Write(err.Error())
+			p.markInstanceExited()
 			p.onProcessEnd(types.ProcessStateError)
 			return 1
 		}
@@ -207,6 +212,7 @@ loop:
 			p.setState(types.ProcessStateLaunched)
 			p.waitForDaemonCompletion()
 		}
+		p.markInstanceExited()
 
 		if !p.isRestartable() {
 			break
@@ -276,6 +282,9 @@ func (p *Process) waitForStdOutErr() {
 func (p *Process) getProcessStarter() func() error {
 	return func() error {
 		p.command = p.getCommander()
+		p.instanceMtx.Lock()
+		p.instanceExited = make(chan struct{})
+		p.instanceMtx.Unlock()
 		p.command.SetEnv(p.getProcessEnvironment())
 		p.command.SetDir(p.procConf.WorkingDir)
 
@@ -557,41 +566,53 @@ func (p *Process) stopProcess(withNoRestart bool) error {
 		}
 		p.cancelReadyLogFunc(fmt.Errorf("process %s was shut down", p.getName()))
 	}
+	cmd, exited := p.stoppingInstance()
 	if isStringDefined(p.procConf.ShutDownParams.ShutDownCommand) {
-		return p.doConfiguredStop(p.procConf.ShutDownParams)
+		return p.doConfiguredStop(p.procConf.ShutDownParams, cmd, exited)
 	}
 	if isStringDefined(p.procConf.ShutDownParams.SendKeys) {
-		return p.doSendKeysStop(p.procConf.ShutDownParams)
+		return p.doSendKeysStop(p.procConf.ShutDownParams, cmd, exited)
 	}
-	err := p.command.Stop(p.procConf.ShutDownParams.Signal, p.procConf.ShutDownParams.ParentOnly)
-	if err != nil {
-		log.Error().Err(err).Msgf("terminating %s failed", p.getName())
-	}
-	if p.procConf.ShutDownParams.ShutDownTimeout != UndefinedShutdownTimeoutSec {
-		return p.forceKillOnTimeout()
-	}
-	return err
+	return p.gracefulShutDownWithSignal(p.procConf.ShutDownParams, cmd, exited)
 }
 
-func (p *Process) forceKillOnTimeout() error {
-	p.mtxStopFn.Lock()
-	p.waitForStoppedCtx, p.waitForStoppedFn = context.WithTimeout(context.Background(), time.Duration(p.procConf.ShutDownParams.ShutDownTimeout)*time.Second)
-	p.mtxStopFn.Unlock()
-	<-p.waitForStoppedCtx.Done()
-	err := p.waitForStoppedCtx.Err()
-	switch {
-	case errors.Is(err, context.Canceled):
-		return nil
-	case errors.Is(err, context.DeadlineExceeded):
-		log.Debug().Msgf("process failed to shut down within %d seconds, sending %d", p.procConf.ShutDownParams.ShutDownTimeout, syscall.SIGKILL)
-		return p.command.Stop(int(syscall.SIGKILL), false)
+// stoppingInstance returns the current command and the channel that closes
+// when it exits. Stop paths capture both up front, so their SIGKILL fallback
+// targets the instance being stopped even if the process restarts meanwhile.
+func (p *Process) stoppingInstance() (command.Commander, <-chan struct{}) {
+	p.instanceMtx.Lock()
+	defer p.instanceMtx.Unlock()
+	return p.command, p.instanceExited
+}
+
+func (p *Process) markInstanceExited() {
+	p.instanceMtx.Lock()
+	defer p.instanceMtx.Unlock()
+	if p.instanceExited == nil {
+		return
+	}
+	select {
+	case <-p.instanceExited:
 	default:
-		log.Error().Err(err).Msgf("terminating %s with timeout %d failed", p.getName(), p.procConf.ShutDownParams.ShutDownTimeout)
-		return err
+		close(p.instanceExited)
 	}
 }
 
-func (p *Process) doConfiguredStop(params types.ShutDownParams) error {
+// forceKillOnTimeout waits up to timeoutSec for the stopped instance to exit
+// and SIGKILLs it if it has not.
+func (p *Process) forceKillOnTimeout(cmd command.Commander, exited <-chan struct{}, timeoutSec int) error {
+	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
+	defer timer.Stop()
+	select {
+	case <-exited:
+		return nil
+	case <-timer.C:
+		log.Debug().Msgf("process %s failed to shut down within %d seconds, sending %d", p.getName(), timeoutSec, syscall.SIGKILL)
+		return cmd.Stop(int(syscall.SIGKILL), false)
+	}
+}
+
+func (p *Process) doConfiguredStop(params types.ShutDownParams, stopped command.Commander, exited <-chan struct{}) error {
 	timeout := params.ShutDownTimeout
 	if timeout == UndefinedShutdownTimeoutSec {
 		timeout = DefaultShutdownTimeoutSec
@@ -608,7 +629,12 @@ func (p *Process) doConfiguredStop(params types.ShutDownParams) error {
 	if err := cmd.Run(); err != nil {
 		// the process termination timedout and it will be killed
 		log.Error().Msgf("terminating %s with timeout %d failed - %s", p.getName(), timeout, err.Error())
-		return p.command.Stop(int(syscall.SIGKILL), false)
+		select {
+		case <-exited:
+			return nil
+		default:
+			return stopped.Stop(int(syscall.SIGKILL), false)
+		}
 	}
 	return nil
 }
@@ -628,42 +654,28 @@ func (p *Process) sendKeys(s string) error {
 // configured keys to the process's stdin and waits up to the shutdown timeout
 // for the process to exit on its own. If it does not exit in time, it is killed
 // with SIGKILL (mirroring the shutdown.command fallback behavior).
-func (p *Process) doSendKeysStop(params types.ShutDownParams) error {
+func (p *Process) doSendKeysStop(params types.ShutDownParams, cmd command.Commander, exited <-chan struct{}) error {
 	if err := p.sendKeys(params.SendKeys); err != nil {
 		log.Error().Err(err).Msgf("failed to send keys to %s, falling back to signal", p.getName())
-		return p.gracefulShutDownWithSignal(params)
+		return p.gracefulShutDownWithSignal(params, cmd, exited)
 	}
 	timeout := params.ShutDownTimeout
 	if timeout == UndefinedShutdownTimeoutSec {
 		timeout = DefaultShutdownTimeoutSec
 	}
-	p.mtxStopFn.Lock()
-	p.waitForStoppedCtx, p.waitForStoppedFn = context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	p.mtxStopFn.Unlock()
-	<-p.waitForStoppedCtx.Done()
-	err := p.waitForStoppedCtx.Err()
-	switch {
-	case errors.Is(err, context.Canceled):
-		return nil // exited gracefully in response to the keys
-	case errors.Is(err, context.DeadlineExceeded):
-		log.Debug().Msgf("process %s failed to exit on keys within %d seconds, sending %d", p.getName(), timeout, syscall.SIGKILL)
-		return p.command.Stop(int(syscall.SIGKILL), false)
-	default:
-		log.Error().Err(err).Msgf("terminating %s with send_keys timeout %d failed", p.getName(), timeout)
-		return err
-	}
+	return p.forceKillOnTimeout(cmd, exited, timeout)
 }
 
 // gracefulShutDownWithSignal sends the configured signal and applies the
-// SIGKILL-on-timeout fallback. It mirrors the default branch of stopProcess and
-// is used when send_keys cannot be delivered.
-func (p *Process) gracefulShutDownWithSignal(params types.ShutDownParams) error {
-	err := p.command.Stop(params.Signal, params.ParentOnly)
+// SIGKILL-on-timeout fallback. It is the default stop path and the fallback
+// when send_keys cannot be delivered.
+func (p *Process) gracefulShutDownWithSignal(params types.ShutDownParams, cmd command.Commander, exited <-chan struct{}) error {
+	err := cmd.Stop(params.Signal, params.ParentOnly)
 	if err != nil {
 		log.Error().Err(err).Msgf("terminating %s failed", p.getName())
 	}
 	if params.ShutDownTimeout != UndefinedShutdownTimeoutSec {
-		return p.forceKillOnTimeout()
+		return p.forceKillOnTimeout(cmd, exited, params.ShutDownTimeout)
 	}
 	return err
 }
@@ -705,12 +717,6 @@ func (p *Process) onProcessEnd(state string) {
 	if isStringDefined(p.procConf.LogLocation) {
 		p.logger.Close()
 	}
-	p.mtxStopFn.Lock()
-	if p.waitForStoppedFn != nil {
-		p.waitForStoppedFn()
-		p.waitForStoppedFn = nil
-	}
-	p.mtxStopFn.Unlock()
 	p.cancelReadyLogFunc(fmt.Errorf("process %s completed", p.getName()))
 	p.stopProbes()
 	if p.readyProber != nil {

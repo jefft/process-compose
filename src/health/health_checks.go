@@ -106,6 +106,10 @@ func (p *Prober) Stop() {
 	p.stopCh = nil
 }
 
+// startupProbeBackoffBase is the delay after the first failed startup check.
+// Each subsequent delay doubles until it reaches startup_period_seconds.
+const startupProbeBackoffBase = 100 * time.Millisecond
+
 func (p *Prober) runLoop(stopCh <-chan struct{}) {
 	// Do not start a check for a loop that has already been superseded.
 	select {
@@ -114,46 +118,66 @@ func (p *Prober) runLoop(stopCh <-chan struct{}) {
 	default:
 	}
 
-	// Run the first check immediately, then poll at the state dependent interval.
+	// Run the first check immediately, then wait for the state dependent
+	// interval. A timer (rather than a ticker) is used because the startup
+	// delay changes after every failed check.
+	checkStartedAt := time.Now()
 	p.runCheck(stopCh)
 
-	interval := p.nextInterval()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
+	startupAttempt := 0
 	for {
+		delay, starting := p.nextInterval(startupAttempt)
+		if starting {
+			startupAttempt++
+		} else {
+			startupAttempt = 0
+		}
+		// Measure the interval from the start of the check, not from its
+		// completion, so a check that takes longer than the delay does not
+		// silently halve the probe rate.
+		wait := delay - time.Since(checkStartedAt)
+		if wait < 0 {
+			wait = 0
+		}
+		timer := time.NewTimer(wait)
 		select {
-		case <-ticker.C:
+		case <-timer.C:
+			checkStartedAt = time.Now()
 			p.runCheck(stopCh)
-			if next := p.nextInterval(); next != interval {
-				interval = next
-				ticker.Reset(interval)
-			}
 		case <-stopCh:
+			timer.Stop()
 			return
 		}
 	}
 }
 
-// nextInterval returns the interval to wait before the next check, based on the
-// health state recorded by the check that just ran.
-func (p *Prober) nextInterval() time.Duration {
+// nextInterval returns the delay before the next check and whether the probe
+// is still in its startup phase.
+func (p *Prober) nextInterval(startupAttempt int) (time.Duration, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.intervalLocked()
-}
-
-// intervalLocked returns the poll interval for the probe's current health
-// phase. Caller must hold p.mu.
-func (p *Prober) intervalLocked() time.Duration {
 	switch {
 	case !p.wasEverHealthy:
-		return time.Duration(p.probe.StartupPeriodSeconds) * time.Second
+		return startupBackoff(startupAttempt, p.probe.StartupPeriodSeconds), true
 	case !p.isHealthy:
-		return time.Duration(p.probe.UnhealthyPeriodSeconds) * time.Second
+		return time.Duration(p.probe.UnhealthyPeriodSeconds) * time.Second, false
 	default:
-		return time.Duration(p.probe.PeriodSeconds) * time.Second
+		return time.Duration(p.probe.PeriodSeconds) * time.Second, false
 	}
+}
+
+// startupBackoff returns the delay after the given number of failed startup
+// checks: 100ms, 200ms, 400ms, ... capped at startup_period_seconds.
+func startupBackoff(attempt int, startupPeriodSeconds int) time.Duration {
+	limit := time.Duration(startupPeriodSeconds) * time.Second
+	delay := startupProbeBackoffBase
+	for i := 0; i < attempt && delay < limit; i++ {
+		delay *= 2
+	}
+	if delay > limit {
+		delay = limit
+	}
+	return delay
 }
 
 // failureBudgetLocked returns the wall-clock budget for the current failure

@@ -1137,15 +1137,19 @@ func (p *Process) onLivenessCheckEnd(_, isFatal bool, err string, details any) {
 		p.notifyDaemonStopped()
 		rcMap, ok := details.(map[string]string)
 		if ok {
-			p.printDetails(rcMap, err, "liveness")
+			p.printDetails(rcMap, err, "liveness", false)
 		}
 	}
 }
 
-func (p *Process) printDetails(details map[string]string, err, source string) {
+func (p *Process) printDetails(details map[string]string, err, source string, debug bool) {
 	exitCode, _ := strconv.Atoi(details["exit_code"])
 	output := details["output"]
-	log.Warn().
+	event := log.Warn()
+	if debug {
+		event = log.Debug()
+	}
+	event.
 		Str("error", err).
 		Int("exit_code", exitCode).
 		Msgf("%s %s probe failed", p.getName(), source)
@@ -1158,6 +1162,11 @@ func (p *Process) printDetails(details map[string]string, err, source string) {
 }
 
 func (p *Process) onReadinessCheckEnd(isOk, isFatal bool, err string, details any) {
+	previousHealth := types.ProcessHealthUnknown
+	p.getStateData(func(state *types.ProcessState) {
+		previousHealth = state.Health
+	})
+
 	if isFatal {
 		p.setProcHealth(types.ProcessHealthNotReady)
 		p.logBuffer.Write("Error: readiness check fail - " + err)
@@ -1170,15 +1179,21 @@ func (p *Process) onReadinessCheckEnd(isOk, isFatal bool, err string, details an
 	}
 
 	procHealth := types.ProcessHealthUnknown
+	everReady := false
 	p.getStateData(func(state *types.ProcessState) {
 		procHealth = state.Health
+		everReady = state.ProcessReadyTime != nil
 	})
 
-	//log exec error if not healthy and output is not empty
+	// Startup failures are expected while the service initializes. Log the
+	// first failure of a streak, and any fatal or post-ready failure, as a
+	// warning; keep the retries at debug so the 100ms startup backoff does not
+	// flood the log.
 	if procHealth == types.ProcessHealthNotReady {
 		rcMap, ok := details.(map[string]string)
 		if ok {
-			p.printDetails(rcMap, err, "readiness")
+			debug := !everReady && !isFatal && previousHealth == types.ProcessHealthNotReady
+			p.printDetails(rcMap, err, "readiness", debug)
 		}
 	}
 }

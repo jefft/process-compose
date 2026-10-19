@@ -60,6 +60,30 @@ func (c *blockingChecker) Status() (any, error) {
 	return nil, nil
 }
 
+type slowChecker struct {
+	delay time.Duration
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *slowChecker) Status() (any, error) {
+	c.mu.Lock()
+	c.calls++
+	n := c.calls
+	c.mu.Unlock()
+	if n == 1 {
+		return nil, nil
+	}
+	time.Sleep(c.delay)
+	return nil, errors.New("check failed")
+}
+
+func (c *slowChecker) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
 func newTestProber(t *testing.T, probe Probe, checker health.ICheckable, onEnd func(bool, bool, string, any)) *Prober {
 	t.Helper()
 	probe.Exec = &ExecProbe{Command: "true"}
@@ -88,6 +112,83 @@ func assertSchedule(t *testing.T, calls []time.Time, want []time.Duration) {
 	}
 }
 
+func TestProber_StartupBackoffDelays(t *testing.T) {
+	t.Parallel()
+	p := &Prober{probe: Probe{
+		StartupPeriodSeconds:   1,
+		PeriodSeconds:          10,
+		UnhealthyPeriodSeconds: 2,
+	}}
+	want := []time.Duration{
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		400 * time.Millisecond,
+		800 * time.Millisecond,
+		time.Second,
+		time.Second,
+	}
+	for attempt, w := range want {
+		got, starting := p.nextInterval(attempt)
+		if !starting {
+			t.Fatalf("attempt %d: starting = false, want true", attempt)
+		}
+		if got != w {
+			t.Errorf("attempt %d: delay = %v, want %v", attempt, got, w)
+		}
+	}
+
+	// A larger startup period raises the cap, not the base.
+	p.probe.StartupPeriodSeconds = 5
+	large := []time.Duration{
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		400 * time.Millisecond,
+		800 * time.Millisecond,
+		1600 * time.Millisecond,
+		3200 * time.Millisecond,
+		5 * time.Second,
+		5 * time.Second,
+	}
+	for attempt, w := range large {
+		if got, _ := p.nextInterval(attempt); got != w {
+			t.Errorf("cap 5s, attempt %d: delay = %v, want %v", attempt, got, w)
+		}
+	}
+
+	// Once healthy, the startup schedule is irrelevant; unhealthy uses its
+	// own fixed interval.
+	p.wasEverHealthy = true
+	p.isHealthy = false
+	if got, starting := p.nextInterval(99); got != 2*time.Second || starting {
+		t.Errorf("unhealthy: delay = %v, starting = %v; want 2s, false", got, starting)
+	}
+	p.isHealthy = true
+	if got, starting := p.nextInterval(0); got != 10*time.Second || starting {
+		t.Errorf("healthy: delay = %v, starting = %v; want 10s, false", got, starting)
+	}
+}
+
+func TestProber_IntervalMeasuredFromCheckStart(t *testing.T) {
+	t.Parallel()
+	// The first check succeeds, switching to period_seconds. Later checks take
+	// 300ms. With a 1s period, checks are due at ~0, ~1, ~2s; measuring the
+	// delay after completion would push them to ~0, ~1.3, ~2.6s.
+	checker := &slowChecker{delay: 300 * time.Millisecond}
+	p := newTestProber(t, Probe{
+		StartupPeriodSeconds: 1,
+		PeriodSeconds:        1,
+		FailureThreshold:     100,
+	}, checker, func(bool, bool, string, any) {})
+
+	p.Start()
+	time.Sleep(2500 * time.Millisecond)
+	p.Stop()
+
+	if got := checker.count(); got < 3 {
+		t.Errorf("got %d checks in 2.5s, want at least 3: the interval is being measured after the check instead of from its start", got)
+	}
+}
+
 func TestProber_StartupPeriodAppliesUntilFirstSuccess(t *testing.T) {
 	t.Parallel()
 	// Fail twice, then succeed. The first success must switch the poll interval
@@ -100,11 +201,21 @@ func TestProber_StartupPeriodAppliesUntilFirstSuccess(t *testing.T) {
 	}, checker, func(bool, bool, string, any) {})
 
 	p.Start()
-	// t=0 fail, t=1 fail, t=2 ok, next check not before t=7.
+	// Startup checks back off: fail at t=0, ~t=0.1, then succeed at ~t=0.3.
+	// The next check is a full period away (t≈5.3), so only three run.
 	time.Sleep(3500 * time.Millisecond)
 	p.Stop()
 
-	assertSchedule(t, checker.snapshot(), []time.Duration{0, time.Second, 2 * time.Second})
+	calls := checker.snapshot()
+	if len(calls) != 3 {
+		t.Fatalf("got %d checks, want 3", len(calls))
+	}
+	if gap := calls[1].Sub(calls[0]); gap >= 900*time.Millisecond {
+		t.Errorf("first retry after %v, want the subsecond startup backoff", gap)
+	}
+	if gap := calls[2].Sub(calls[1]); gap >= 900*time.Millisecond {
+		t.Errorf("second retry after %v, want the subsecond startup backoff", gap)
+	}
 }
 
 func TestProber_SwitchesToPeriodAfterImmediateSuccess(t *testing.T) {
@@ -198,8 +309,10 @@ func TestProber_FatalReportedOncePerFailureStreak(t *testing.T) {
 
 func TestProber_FailureStreakResetsOnSuccess(t *testing.T) {
 	t.Parallel()
-	// Two failures, a success, then two more -> two distinct streaks, two fatals.
-	checker := &fakeChecker{fail: func(n int) bool { return n != 3 }}
+	// Fail long enough for a fatal, succeed once, then fail long enough for
+	// another -> two distinct streaks, two fatals. Startup backoff means the
+	// first streak needs more than two one-second failures to reach the budget.
+	checker := &fakeChecker{fail: func(n int) bool { return n != 6 }}
 
 	var mu sync.Mutex
 	fatals := 0
@@ -437,8 +550,8 @@ func TestProber_StartupFailAfterBudget(t *testing.T) {
 	if len(calls) == 0 {
 		t.Fatal("prober never ran a check")
 	}
-	if elapsed := fatalAt.Sub(calls[0]); elapsed < 2*time.Second-tolerance || elapsed > 2*time.Second+tolerance {
-		t.Errorf("gave up after %v, want ~2s from the first failure (startup_fail_after_seconds)", elapsed)
+	if elapsed := fatalAt.Sub(calls[0]); elapsed < 2*time.Second-tolerance || elapsed > 2*time.Second+time.Second+tolerance {
+		t.Errorf("gave up after %v, want ~2s plus at most one startup interval (startup_fail_after_seconds)", elapsed)
 	}
 }
 
@@ -544,8 +657,9 @@ func TestProber_FailAfterBudgetAppliesAfterSuccess(t *testing.T) {
 
 func TestProber_FastStartupKeepsWallClockGrace(t *testing.T) {
 	t.Parallel()
-	// period 4s, threshold 2 => give up 4s after the first failure. Polling
-	// every second must still give up at ~4s, on the 5th failure, not the 2nd.
+	// period 4s, threshold 2 => give up 4s after the first failure. The
+	// startup polls back off to 1s, so the wall-clock budget, not the count,
+	// decides when the probe gives up.
 	checker := &fakeChecker{fail: func(int) bool { return true }}
 
 	var mu sync.Mutex
@@ -577,10 +691,10 @@ func TestProber_FastStartupKeepsWallClockGrace(t *testing.T) {
 	if fatals != 1 {
 		t.Fatalf("fatal reported %d times, want 1", fatals)
 	}
-	if fatalAtCheck != 5 {
-		t.Errorf("fatal reported on check %d, want 5", fatalAtCheck)
+	if fatalAtCheck < 5 {
+		t.Errorf("fatal reported on check %d, want at least 5", fatalAtCheck)
 	}
-	if elapsed := fatalAt.Sub(start); elapsed < 4*time.Second-tolerance || elapsed > 4*time.Second+tolerance {
-		t.Errorf("gave up after %v, want ~4s (the steady-state grace)", elapsed)
+	if elapsed := fatalAt.Sub(start); elapsed < 4*time.Second-tolerance || elapsed > 4*time.Second+time.Second+tolerance {
+		t.Errorf("gave up after %v, want ~4s plus at most one startup interval", elapsed)
 	}
 }

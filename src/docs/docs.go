@@ -1253,6 +1253,17 @@ const docTemplate = `{
                 "$ref": "#/definitions/types.ProcessDependency"
             }
         },
+        "types.HookConfig": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string"
+                },
+                "timeoutSeconds": {
+                    "type": "integer"
+                }
+            }
+        },
         "types.LogRotationConfig": {
             "type": "object",
             "properties": {
@@ -1544,6 +1555,18 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "onExit": {
+                    "$ref": "#/definitions/types.HookConfig"
+                },
+                "onPortsChanged": {
+                    "$ref": "#/definitions/types.HookConfig"
+                },
+                "onReady": {
+                    "$ref": "#/definitions/types.HookConfig"
+                },
+                "onStart": {
+                    "$ref": "#/definitions/types.HookConfig"
                 },
                 "originalConfig": {
                     "type": "string"

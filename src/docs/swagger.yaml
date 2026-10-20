@@ -125,6 +125,13 @@ components:
             additionalProperties:
                 $ref: '#/components/schemas/types.ProcessDependency'
             type: object
+        types.HookConfig:
+            properties:
+                command:
+                    type: string
+                timeoutSeconds:
+                    type: integer
+            type: object
         types.LogRotationConfig:
             properties:
                 compress:
@@ -331,6 +338,14 @@ components:
                     items:
                         type: string
                     type: array
+                onExit:
+                    $ref: '#/components/schemas/types.HookConfig'
+                onPortsChanged:
+                    $ref: '#/components/schemas/types.HookConfig'
+                onReady:
+                    $ref: '#/components/schemas/types.HookConfig'
+                onStart:
+                    $ref: '#/components/schemas/types.HookConfig'
                 originalConfig:
                     type: string
                 readinessProbe:

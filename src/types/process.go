@@ -69,6 +69,10 @@ type (
 		MonitorFor              MonitorFor          `yaml:"monitor_for,omitempty" json:"monitorFor,omitempty" jsonschema:"type=string,enum=none,enum=activity,enum=silence"`
 		MonitorSilenceThreshold time.Duration       `yaml:"monitor_silence_threshold,omitempty" json:"monitorSilenceThreshold,omitempty"`
 		SuccessExitCodes        []int               `yaml:"success_exit_codes,omitempty" json:"successExitCodes,omitempty"`
+		OnStart                 *HookConfig         `yaml:"on_start,omitempty" json:"onStart,omitempty"`
+		OnReady                 *HookConfig         `yaml:"on_ready,omitempty" json:"onReady,omitempty"`
+		OnExit                  *HookConfig         `yaml:"on_exit,omitempty" json:"onExit,omitempty"`
+		OnPortsChanged          *HookConfig         `yaml:"on_ports_changed,omitempty" json:"onPortsChanged,omitempty"`
 	}
 )
 
@@ -170,6 +174,10 @@ func (p *ProcessConfig) compareCompositeFields(another *ProcessConfig) bool {
 		{p.Watch, another.Watch},
 		{p.SuccessExitCodes, another.SuccessExitCodes},
 		{p.Schedule, another.Schedule},
+		{p.OnStart, another.OnStart},
+		{p.OnReady, another.OnReady},
+		{p.OnExit, another.OnExit},
+		{p.OnPortsChanged, another.OnPortsChanged},
 	}
 	for _, field := range composites {
 		if !reflect.DeepEqual(field.a, field.b) {
@@ -224,6 +232,14 @@ func (p *ProcessConfig) AssignProcessExecutableAndArgs(shellConf *command.ShellC
 }
 
 func (p *ProcessConfig) ValidateProcessConfig() error {
+	for name, hook := range map[string]*HookConfig{
+		"on_start": p.OnStart, "on_ready": p.OnReady,
+		"on_exit": p.OnExit, "on_ports_changed": p.OnPortsChanged,
+	} {
+		if err := hook.Validate(); err != nil {
+			return fmt.Errorf("process '%s' %s: %w", p.Name, name, err)
+		}
+	}
 	for _, code := range p.SuccessExitCodes {
 		if code < 0 || code > 255 {
 			return fmt.Errorf("invalid success_exit_codes value %d in process '%s': exit codes must be in the range 0-255", code, p.Name)

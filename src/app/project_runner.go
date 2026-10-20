@@ -91,6 +91,8 @@ type ProjectRunner struct {
 	processWatcher       atomic.Pointer[watcher.Watcher]
 	stateBroadcaster     *ProcessStateBroadcaster
 	admitters            []admitter.Admitter
+	hookChainsMutex      sync.Mutex
+	hookChains           map[string]*processHookInstance
 }
 
 // RestartCall represents an in-flight restart operation
@@ -179,7 +181,14 @@ func (p *ProjectRunner) Run() error {
 		p.logger.Open(p.project.LogLocation, p.project.LoggerConfig)
 		defer p.logger.Close()
 	}
+	defer p.waitForServiceHooks()
 	p.prepareEnvCmds()
+	projectDir := hookProjectDirectory()
+	readyHook := newProjectReadyHook(p, runOrder, projectDir)
+	if readyHook != nil {
+		p.RegisterStateObserver(readyHook)
+		defer p.UnregisterStateObserver(readyHook)
+	}
 	//zerolog.SetGlobalLevel(zerolog.PanicLevel)
 	log.Debug().Msgf("Spinning up %d processes. Order: %q", len(runOrder), nameOrder)
 
@@ -216,7 +225,10 @@ func (p *ProjectRunner) Run() error {
 
 	for {
 		select {
+		case <-readyHook.notifications():
+			readyHook.runIfReady()
 		case <-p.ctxApp.Done():
+			readyHook.runIfReady()
 			p.exitCodeMutex.Lock()
 			exitCode := p.exitCode
 			p.exitCodeMutex.Unlock()
@@ -225,6 +237,7 @@ func (p *ProjectRunner) Run() error {
 			}
 			return err
 		case runProcCount := <-p.procCompleteChannel:
+			readyHook.runIfReady()
 			log.Debug().Msgf("Remaining processes: %d", runProcCount)
 			if runProcCount == 0 {
 				p.restartMutex.Lock()
@@ -297,6 +310,8 @@ func (p *ProjectRunner) runProcess(config *types.ProcessConfig) {
 		withProcState(procState),
 		withProcLog(procLog),
 		withShellConfig(*p.project.ShellConfig),
+		withHookProject(p.project.Name, hookProjectDirectory()),
+		withHookChain(p.linkServiceHookInstance),
 		withPrintLogs(printLogs),
 		withIsMain(isMain),
 		withExtraArgs(extraArgs),
@@ -1289,6 +1304,7 @@ func (p *ProjectRunner) ShutDownProject() error {
 	}
 
 	p.shutDownAndWait(shutdownOrder)
+	p.waitForServiceHooks()
 	p.cancelAppFn()
 	return nil
 }

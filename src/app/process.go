@@ -62,6 +62,12 @@ type Process struct {
 	// the channel of the instance it stops, so it can never kill a later one.
 	instanceMtx          sync.Mutex
 	instanceExited       chan struct{}
+	callbackMtx          sync.RWMutex
+	hookInstance         *processHookInstance
+	hookProjectName      string
+	hookProjectDir       string
+	linkHookInstance     func(*processHookInstance) *processHookInstance
+	probesMtx            sync.Mutex
 	procColor            func(a ...any) string
 	noColor              func(a ...any) string
 	redColor             func(a ...any) string
@@ -133,7 +139,7 @@ func NewProcess(opts ...ProcOpts) *Process {
 	proc.procReadyCtx, proc.readyCancelFn = context.WithCancel(context.Background())
 	proc.procLogReadyCtx, proc.readyLogCancelFn = context.WithCancelCause(context.Background())
 	proc.procRunCtx, proc.runCancelFn = context.WithCancel(context.Background())
-	proc.setUpProbes()
+	proc.setUpProbes(nil)
 	proc.procCond = *sync.NewCond(proc)
 	return proc
 }
@@ -163,29 +169,23 @@ func (p *Process) run() int {
 	p.onProcessStart()
 loop:
 	for {
+		p.stopProbes()
+		p.callbackMtx.Lock()
+		instance := p.newHookInstance(p.hookInstance)
+		p.hookInstance = instance
+		p.setUpProbes(instance)
 		err := p.setStateAndRun(p.getStartingStateName(), p.getProcessStarter())
+		p.callbackMtx.Unlock()
 		if err != nil {
 			log.Error().Err(err).Msgf(`Failed to run command ["%v"] for process %s`, strings.Join(p.getCommand(), `" "`), p.getName())
 			p.logBuffer.Write(err.Error())
 			p.markInstanceExited()
+			instance.finish(1, p.hookStopReason(), 0)
 			p.onProcessEnd(types.ProcessStateError)
 			return 1
 		}
 
-		now := time.Now()
-		p.setStartTime(now)
 		p.stateMtx.Lock()
-		p.procState.Pid = p.command.Pid()
-		if p.procState.ProcessStartTime == nil {
-			startCopy := now
-			p.procState.ProcessStartTime = &startCopy
-			// Processes without any readiness signal are considered ready as
-			// soon as they start. Probes/log-ready handlers override this later.
-			if p.readyProber == nil && p.procConf.ReadyLogLine == "" {
-				readyCopy := now
-				p.procState.ProcessReadyTime = &readyCopy
-			}
-		}
 		p.metricsProc, err = puproc.NewProcess(int32(p.procState.Pid))
 		if err != nil {
 			log.Err(err).Msgf("Could not find pid %d with name %s", p.procState.Pid, p.getName())
@@ -196,10 +196,13 @@ loop:
 			Strs("command", p.getCommand()).
 			Msg("Started")
 
+		if !p.hasReadinessProbe() && p.procConf.ReadyLogLine == "" {
+			instance.markReady()
+		}
 		p.startProbes()
 
 		p.waitForStdOutErr()
-		_ = p.command.Wait()
+		waitErr := p.command.Wait()
 		p.Lock()
 		p.setExitCode(p.command.ExitCode())
 		p.Unlock()
@@ -213,6 +216,10 @@ loop:
 			p.waitForDaemonCompletion()
 		}
 		p.markInstanceExited()
+		p.stopProbes()
+		p.callbackMtx.Lock()
+		instance.finish(p.getExitCode(), p.hookStopReason(), hookExitSignal(waitErr))
+		p.callbackMtx.Unlock()
 
 		if !p.isRestartable() {
 			break
@@ -281,11 +288,19 @@ func (p *Process) waitForStdOutErr() {
 
 func (p *Process) getProcessStarter() func() error {
 	return func() error {
-		p.command = p.getCommander()
+		cmd := p.getCommander()
 		p.instanceMtx.Lock()
+		p.command = cmd
 		p.instanceExited = make(chan struct{})
 		p.instanceMtx.Unlock()
-		p.command.SetEnv(p.getProcessEnvironment())
+		p.procState.Health = types.ProcessHealthUnknown
+		p.procState.ProcessReadyTime = nil
+		instance := p.hookInstance
+		env := instance.env
+		if env == nil {
+			env = p.getProcessEnvironment()
+		}
+		p.command.SetEnv(env)
 		p.command.SetDir(p.procConf.WorkingDir)
 
 		if p.isMain || (p.procConf.IsElevated && !p.isTuiEnabled) {
@@ -298,12 +313,12 @@ func (p *Process) getProcessStarter() func() error {
 			if !p.procConf.IsInteractive {
 				stdout, _ := p.command.StdoutPipe()
 				p.stdOutDone = make(chan struct{})
-				go p.handleOutput(stdout, "stdout", p.handleInfo, p.stdOutDone)
+				go p.handleOutput(stdout, "stdout", p.handleInfo, p.stdOutDone, instance)
 			}
 			if !p.procConf.IsTty && !p.procConf.IsInteractive {
 				stderr, _ := p.command.StderrPipe()
 				p.stdErrDone = make(chan struct{})
-				go p.handleOutput(stderr, "stderr", p.handleError, p.stdErrDone)
+				go p.handleOutput(stderr, "stderr", p.handleError, p.stdErrDone, instance)
 			}
 		}
 
@@ -315,7 +330,23 @@ func (p *Process) getProcessStarter() func() error {
 			p.stdin = stdin
 		}
 
-		return p.command.Start()
+		err := p.command.Start()
+		if err == nil {
+			now := time.Now()
+			p.setStartTime(now)
+			p.procState.Pid = p.command.Pid()
+			p.procState.IsRunning = true
+			if p.procState.ProcessStartTime == nil {
+				startCopy := now
+				p.procState.ProcessStartTime = &startCopy
+			}
+			if !p.hasReadinessProbe() && p.procConf.ReadyLogLine == "" {
+				readyCopy := now
+				p.procState.ProcessReadyTime = &readyCopy
+			}
+			instance.start(p.command.Pid())
+		}
+		return err
 	}
 }
 
@@ -561,7 +592,7 @@ func (p *Process) stopProcess(withNoRestart bool) error {
 	}
 	p.stopProbes()
 	if withNoRestart {
-		if p.readyProber != nil {
+		if p.hasReadinessProbe() {
 			p.readyCancelFn()
 		}
 		p.cancelReadyLogFunc(fmt.Errorf("process %s was shut down", p.getName()))
@@ -714,12 +745,9 @@ func (p *Process) onProcessStart() {
 }
 
 func (p *Process) onProcessEnd(state string) {
-	if isStringDefined(p.procConf.LogLocation) {
-		p.logger.Close()
-	}
 	p.cancelReadyLogFunc(fmt.Errorf("process %s completed", p.getName()))
 	p.stopProbes()
-	if p.readyProber != nil {
+	if p.hasReadinessProbe() {
 		p.readyCancelFn()
 	}
 	p.setStateNoPublish(state)
@@ -748,6 +776,12 @@ func (p *Process) onProcessEnd(state string) {
 			close(p.procDoneChan)
 		}
 	})
+	// Completion is observable before notifications drain: hooks are not
+	// dependency gates, but their output must precede the logger closing.
+	p.waitForHooks()
+	if isStringDefined(p.procConf.LogLocation) {
+		p.logger.Close()
+	}
 }
 
 func (p *Process) getLogPath() string {
@@ -905,7 +939,7 @@ func (p *Process) handleInput(pipe io.WriteCloser) {
 	}
 }
 
-func (p *Process) handleOutput(pipe io.ReadCloser, output string, handler func(message string), done chan struct{}) {
+func (p *Process) handleOutput(pipe io.ReadCloser, output string, handler func(message string), done chan struct{}, instance *processHookInstance) {
 	reader := bufio.NewReader(pipe)
 	for {
 		line, err := reader.ReadString('\n')
@@ -923,13 +957,19 @@ func (p *Process) handleOutput(pipe io.ReadCloser, output string, handler func(m
 				Msgf("error reading from %s", output)
 			break
 		}
-		if p.procConf.ReadyLogLine != "" && p.procState.Health == types.ProcessHealthUnknown && strings.Contains(line, p.procConf.ReadyLogLine) {
-			// setProcHealth takes stateMtx, updates Health and (for Ready)
-			// records ProcessReadyTime atomically.
-			p.setProcHealth(types.ProcessHealthReady)
-			p.cancelReadyLogFunc(nil)
-		}
-		p.checkElevatedProcOutput(line)
+		p.withInstanceCallback(instance, func() {
+			if p.procConf.ReadyLogLine != "" && strings.Contains(line, p.procConf.ReadyLogLine) {
+				p.stateMtx.Lock()
+				firstReady := p.procState.ProcessReadyTime == nil
+				p.stateMtx.Unlock()
+				if firstReady {
+					p.setProcHealth(types.ProcessHealthReady)
+				}
+				p.cancelReadyLogFunc(nil)
+				instance.markReady()
+			}
+			p.checkElevatedProcOutput(line)
+		})
 		handler(strings.TrimSuffix(line, "\n"))
 	}
 	close(done)
@@ -1051,12 +1091,11 @@ func (p *Process) setStateAndRun(state string, runnable func() error) error {
 	p.stateMtx.Lock()
 	p.procState.Status = state
 	p.onStateChange(state)
+	err := runnable()
 	ev := p.snapshotEventLocked()
-	defer func() {
-		p.stateMtx.Unlock()
-		p.publishLocked(ev)
-	}()
-	return runnable()
+	p.stateMtx.Unlock()
+	p.publishLocked(ev)
+	return err
 }
 
 func (p *Process) GetPty() *os.File {
@@ -1086,7 +1125,9 @@ func (p *Process) getStartingStateName() string {
 	return types.ProcessStateRunning
 }
 
-func (p *Process) setUpProbes() {
+func (p *Process) setUpProbes(instance *processHookInstance) {
+	p.probesMtx.Lock()
+	defer p.probesMtx.Unlock()
 	var err error
 	if p.procConf.LivenessProbe != nil {
 		p.liveProber, err = health.New(
@@ -1094,7 +1135,11 @@ func (p *Process) setUpProbes() {
 			*p.procConf.LivenessProbe,
 			p.getProcessEnvironment(),
 			p.shellConfig,
-			p.onLivenessCheckEnd,
+			func(ok, fatal bool, message string, details any) {
+				p.withInstanceCallback(instance, func() {
+					p.onLivenessCheckEnd(ok, fatal, message, details)
+				})
+			},
 		)
 		if err != nil {
 			log.Error().Msgf("failed to setup liveness probe for %s - %s", p.getName(), err.Error())
@@ -1108,7 +1153,14 @@ func (p *Process) setUpProbes() {
 			*p.procConf.ReadinessProbe,
 			p.getProcessEnvironment(),
 			p.shellConfig,
-			p.onReadinessCheckEnd,
+			func(ok, fatal bool, message string, details any) {
+				p.withInstanceCallback(instance, func() {
+					p.onReadinessCheckEnd(ok, fatal, message, details)
+					if ok {
+						instance.markReady()
+					}
+				})
+			},
 		)
 		if err != nil {
 			log.Error().Msgf("failed to setup readiness probe for %s - %s", p.getName(), err.Error())
@@ -1118,6 +1170,8 @@ func (p *Process) setUpProbes() {
 }
 
 func (p *Process) startProbes() {
+	p.probesMtx.Lock()
+	defer p.probesMtx.Unlock()
 	if p.liveProber != nil {
 		p.liveProber.Start()
 	}
@@ -1128,6 +1182,8 @@ func (p *Process) startProbes() {
 }
 
 func (p *Process) stopProbes() {
+	p.probesMtx.Lock()
+	defer p.probesMtx.Unlock()
 	if p.liveProber != nil {
 		p.liveProber.Stop()
 	}
@@ -1221,10 +1277,13 @@ func (p *Process) validateProcess() error {
 }
 
 func (p *Process) collectPortPids() map[int]struct{} {
+	p.stateMtx.Lock()
+	pid := p.procState.Pid
+	p.stateMtx.Unlock()
 	pids := map[int]struct{}{
-		p.procState.Pid: {},
+		pid: {},
 	}
-	if p.procState.Pid == 0 {
+	if pid == 0 {
 		return pids
 	}
 	if p.processTree == nil {
@@ -1234,7 +1293,7 @@ func (p *Process) collectPortPids() map[int]struct{} {
 		log.Err(err).Msgf("failed to update process tree for %s", p.getName())
 		return pids
 	}
-	descendants := p.processTree.GetDescendants(int32(p.procState.Pid))
+	descendants := p.processTree.GetDescendants(int32(pid))
 	for _, proc := range descendants {
 		pids[int(proc.Pid)] = struct{}{}
 	}

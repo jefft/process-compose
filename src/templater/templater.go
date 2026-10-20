@@ -43,6 +43,11 @@ func (t *Templater) RenderProcess(proc *types.ProcessConfig) {
 
 	t.renderProbe(proc.ReadinessProbe, proc)
 	t.renderProbe(proc.LivenessProbe, proc)
+	for _, hook := range []*types.HookConfig{proc.OnStart, proc.OnReady, proc.OnExit, proc.OnPortsChanged} {
+		if hook != nil {
+			hook.Command = t.RenderWithExtraVars(hook.Command, proc.Vars)
+		}
+	}
 }
 
 func (t *Templater) renderProbe(probe *health.Probe, procConf *types.ProcessConfig) {

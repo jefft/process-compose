@@ -174,6 +174,12 @@ func validateDependencyIsEnabled(p *types.Project) error {
 }
 
 func validateProject(p *types.Project) error {
+	if err := p.OnReady.Validate(); err != nil {
+		if p.IsStrict {
+			return fmt.Errorf("project on_ready: %w", err)
+		}
+		log.Error().Err(err).Msg("Invalid project on_ready hook")
+	}
 	for key := range p.Extensions {
 		if strings.HasPrefix(key, "x-") {
 			continue

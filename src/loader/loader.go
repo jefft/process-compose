@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/drone/envsubst"
 	"github.com/f1bonacc1/process-compose/src/admitter"
 	"github.com/f1bonacc1/process-compose/src/config"
 	"github.com/f1bonacc1/process-compose/src/types"
@@ -168,7 +167,7 @@ func loadProjectFromFile(inputFile string, opts *LoaderOptions) (*types.Project,
 	const envEscaped = "##PC_ENV_ESCAPED##"
 	// replace escaped $$ env vars in yaml
 	temp := strings.ReplaceAll(string(yamlFile), "$$", envEscaped)
-	temp, err = envsubst.Eval(temp, expanderFn)
+	temp, hookExpressions, err := expandHookEnvironment(temp, expanderFn)
 	if err != nil {
 		log.Fatal().Err(err).Msgf("Failed to parse %s, environment substitution errored.", inputFile)
 		return nil, err
@@ -193,6 +192,9 @@ func loadProjectFromFile(inputFile string, opts *LoaderOptions) (*types.Project,
 			}
 			log.Fatal().Err(err).Msgf("Failed to parse %s", inputFile)
 		}
+	}
+	if !project.DisableEnvExpansion {
+		restoreHookCommands(project, hookExpressions, envEscaped)
 	}
 	project.DotEnvVars = dotEnvVars
 

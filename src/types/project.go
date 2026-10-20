@@ -32,6 +32,7 @@ type Project struct {
 	DotEnvVars          map[string]string    `yaml:"dot_env_vars,omitempty"`
 	Extensions          map[string]any       `yaml:",inline"`
 	MCPServer           *MCPServerConfig     `yaml:"mcp_server,omitempty"`
+	OnReady             *HookConfig          `yaml:"on_ready,omitempty" json:"onReady,omitempty"`
 }
 
 type ProcessFunc func(process ProcessConfig) error

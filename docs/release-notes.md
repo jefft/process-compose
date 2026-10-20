@@ -4,6 +4,15 @@
 
 ### New Features
 
+- Added lifecycle notification hooks: process `on_start`, `on_ready`, `on_exit`,
+  and `on_ports_changed`, plus project-level `on_ready`. Hooks use the configured
+  shell, effective environment and working directory, have a configurable
+  execution timeout (10 seconds by default), and receive structured lifecycle
+  metadata through reserved `PC_*` variables and `PC_EVENT_JSON`. Hook failures
+  only log; they do not change service readiness or dependency behavior.
+  Process notifications remain ordered across manual and watched replacements;
+  pending port changes coalesce without delaying service dependency completion.
+
 - Added [file watching](https://f1bonacc1.github.io/process-compose/watch/): a per-process `watch` block restarts a process when its files change, with include/exclude globs, a configurable `debounce`, and `cascade: true` to restart the process's dependents transitively (in dependency order, so a rebuilt artifact is ready before its consumers restart). A process that has exited while its watch is still armed reports the new `Watching` state, and the TUI names the file that caused each restart. Watch-triggered restarts skip the restart backoff and reset the restart counter, since they are user intent rather than a crash loop. File watching can be turned off entirely with `--no-watch` / `PC_NO_WATCH`.
 - Added support for [multiple namespaces per process](https://f1bonacc1.github.io/process-compose/configuration/#multiple-namespaces): `namespace` now accepts either a single string or a list of strings (similar to docker-compose profiles), so a shared process (e.g. a database) can be selected and operated as part of any of its namespaces, addresses issue #519.
 

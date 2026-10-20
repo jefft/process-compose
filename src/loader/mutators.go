@@ -205,6 +205,10 @@ func cloneProcess(proc *types.ProcessConfig) *types.ProcessConfig {
 	// 5. DEEP COPY the Watch config, so per-replica path resolution doesn't
 	// mutate every other replica through a shared pointer.
 	newProc.Watch = proc.Watch.Clone()
+	newProc.OnStart = proc.OnStart.Clone()
+	newProc.OnReady = proc.OnReady.Clone()
+	newProc.OnExit = proc.OnExit.Clone()
+	newProc.OnPortsChanged = proc.OnPortsChanged.Clone()
 
 	return &newProc
 }
@@ -239,6 +243,12 @@ func assignExecutableAndArgs(p *types.Project) {
 
 func renderTemplates(p *types.Project) error {
 	tpl := templater.New(p.Vars)
+	if p.OnReady != nil {
+		p.OnReady.Command = tpl.Render(p.OnReady.Command)
+		if tpl.GetError() != nil {
+			return fmt.Errorf("error rendering project on_ready template: %w", tpl.GetError())
+		}
+	}
 	for name, proc := range p.Processes {
 		tpl.RenderProcess(&proc)
 

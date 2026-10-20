@@ -32,6 +32,23 @@
       },
       "type": "object"
     },
+    "HookConfig": {
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10
+        }
+      },
+      "type": "object",
+      "required": [
+        "command"
+      ]
+    },
     "HttpProbe": {
       "properties": {
         "host": {
@@ -379,6 +396,18 @@
             "type": "integer"
           },
           "type": "array"
+        },
+        "on_start": {
+          "$ref": "#/$defs/HookConfig"
+        },
+        "on_ready": {
+          "$ref": "#/$defs/HookConfig"
+        },
+        "on_exit": {
+          "$ref": "#/$defs/HookConfig"
+        },
+        "on_ports_changed": {
+          "$ref": "#/$defs/HookConfig"
         }
       },
       "type": "object"
@@ -477,6 +506,9 @@
         },
         "mcp_server": {
           "$ref": "#/$defs/MCPServerConfig"
+        },
+        "on_ready": {
+          "$ref": "#/$defs/HookConfig"
         }
       },
       "type": "object",

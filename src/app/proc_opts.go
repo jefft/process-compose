@@ -105,3 +105,16 @@ func withStatePublisher(publish StatePublisher) ProcOpts {
 		p.publishState = publish
 	}
 }
+
+func withHookProject(name, dir string) ProcOpts {
+	return func(p *Process) {
+		p.hookProjectName = name
+		p.hookProjectDir = dir
+	}
+}
+
+func withHookChain(link func(*processHookInstance) *processHookInstance) ProcOpts {
+	return func(p *Process) {
+		p.linkHookInstance = link
+	}
+}

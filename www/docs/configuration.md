@@ -1,5 +1,139 @@
 # Configuration
 
+## Lifecycle hooks
+
+Hooks run shell commands in response to lifecycle notifications. They do not
+change dependency conditions, readiness, exit codes, or restart policy: a failed
+or timed-out hook is logged, not treated as a failed service.
+
+```yaml
+name: my-project
+on_ready:
+  command: 'echo "Project $PC_PROJECT_NAME is ready"'
+  timeout_seconds: 10
+
+processes:
+  api:
+    command: ./api
+    ready_log_line: "Listening"
+    on_start:
+      command: 'echo "Started $PC_PROCESS_NAME with PID $PC_PROCESS_PID"'
+    on_ready:
+      command: './notify-ready "$PC_TCP_PORTS"'
+    on_ports_changed:
+      command: './update-proxy "$PC_PREVIOUS_TCP_PORTS" "$PC_TCP_PORTS"'
+    on_exit:
+      command: 'echo "$PC_PROCESS_NAME exited: $PC_EXIT_CODE ($PC_STOP_REASON)"'
+```
+
+Every hook block requires a nonempty `command`. `timeout_seconds` defaults to
+10 seconds when omitted or zero; negative values are invalid. Commands use the
+configured project `shell`. Service hooks inherit the service's effective
+environment (including its `env_file`) and `working_dir`; their output goes to
+that service's log. The top-level hook inherits the project's environment,
+including `env_cmds`, and runs in the project's current working directory; its
+output goes to the project logger. Runtime metadata overrides conflicting
+environment variables.
+
+Hook commands support the normal Go templates and process variables, including
+`{{.PC_REPLICA_NUM}}`. Hooks are inherited and merged like other nested process
+configuration, and each replica has an independent rendered configuration.
+In hook commands, lifecycle metadata variables remain late-bound during
+configuration environment expansion, even if the loading environment defines
+the same name. A whole shell parameter expression is deferred when it depends
+on lifecycle metadata, including `${OTHER:-$PC_EVENT}`,
+`${#PC_TCP_PORTS}`, and `${PC_TCP_PORTS:-${FALLBACK}}`.
+Other fields retain their usual expansion behavior, including references to
+those same names. Ordinary `${NAME}` expressions in hook commands still expand
+at load time; `$NAME` remains a shell-time reference. Use `$${NAME}` to defer
+an ordinary braced expression until command execution.
+
+### Events
+
+| Hook | Event | When it fires |
+| --- | --- | --- |
+| Process `on_start` | `start` | Once after a process instance is successfully spawned. |
+| Process `on_ready` | `ready` | Once on its first successful readiness probe or first matching `ready_log_line`; immediately after spawn when neither is configured. A liveness probe alone does not delay this event. |
+| Process `on_exit` | `exit` | Once when that spawned instance exits, including shutdown and restart. |
+| Process `on_ports_changed` | `ports_changed` | On its first nonempty listening-port snapshot, then whenever the observed TCP or UDP ports change, including removal of the last port. |
+| Top-level `on_ready` | `ready` | Once per project run after all selected startup services and their included dependencies satisfy startup readiness. Successful completed tasks count; failed or skipped tasks do not. |
+
+Each restart creates a new instance, so its process hooks can fire again.
+The top-level readiness hook does not fire again when services restart or their
+readiness changes. Disabled, foreground/deferred, unselected, and scheduled
+services do not hold project readiness open; a project with no startup services
+does not emit this event. A service configured with a readiness probe or log
+line must become ready (or complete successfully); other services must start.
+Hook completion is not an additional dependency gate. Process hook commands
+execute asynchronously, in event order for each process name, including across
+restarts; service startup never waits for hook completion.
+Dependency completion is released as soon as the service exits, before its
+remaining notifications finish. Final project shutdown drains notifications
+from all incarnations, including ones replaced by manual or watched restarts,
+before closing their logs. Each command has a bounded execution time, but a
+finite backlog of lifecycle notifications from rapid restarts can delay final
+shutdown.
+
+
+Listening ports are best-effort snapshots, not a promise that a port accepts
+connections. TCP and UDP lists are numeric, sorted, deduplicated, space-separated
+strings (empty when no port is observed). Ports are sampled for readiness and
+polled once per second while port-change hooks have active process instances.
+Short-lived changes between polls can be missed. The initial empty snapshot
+does not trigger `on_ports_changed`; later changes to empty do. A failed port
+query is reported as `PC_PORTS_STATUS=error`, not as an authoritative empty
+snapshot.
+While a hook command is busy, pending port-change notifications for that
+instance are coalesced into the newest snapshot. Previous-port variables retain
+the baseline of the last retained notification, rather than an intermediate
+poll that was never delivered. This keeps at most one pending port notification
+per instance; start, ready, and exit notifications are not discarded.
+
+
+### Runtime variables
+
+All events receive:
+
+| Variable | Value |
+| --- | --- |
+| `PC_EVENT` | `start`, `ready`, `exit`, or `ports_changed`. |
+| `PC_EVENT_TIME` | Event time in UTC RFC 3339 format with nanosecond precision when available. |
+| `PC_PROJECT_NAME` | Configured project name. |
+| `PC_PROJECT_DIR` | Absolute project working directory. |
+| `PC_EVENT_JSON` | Structured event metadata, described below; never the full environment. |
+
+Process events additionally receive:
+
+| Variable | Value |
+| --- | --- |
+| `PC_PROCESS_NAME` | Actual process/replica name, such as `api-0`. |
+| `PC_PROCESS_NAMESPACE` | Namespace membership as a comma-delimited string. |
+| `PC_PROCESS_PID` | PID of this instance. |
+| `PC_RESTART_COUNT` | Restart count for this instance. |
+
+Process `ready` and `ports_changed` events also receive `PC_TCP_PORTS`,
+`PC_UDP_PORTS`, and `PC_PORTS_STATUS` (`ok` or `error`). Port-change events
+additionally receive `PC_PREVIOUS_TCP_PORTS` and `PC_PREVIOUS_UDP_PORTS`.
+
+Event-specific variables that do not apply are unset, not inherited from the
+parent environment. For example, exit hooks do not receive stale readiness
+port variables, and ready hooks do not receive stale exit metadata.
+
+Exit events receive `PC_EXIT_CODE` and `PC_STOP_REASON` (`shutdown`, `restart`,
+or `none`). `PC_EXIT_SIGNAL` is the decimal OS signal number and is included only
+when the actual terminating signal is known; it is not inferred from
+`128 + signal` exit codes.
+
+`PC_EVENT_JSON` contains `event`, `event_time`, `project_name`, and `project_dir`.
+Process events add a `process` object with `name`, `namespace`, `pid`, and
+`restart_count`. Ready/port events add `ports` with `tcp` and `udp` numeric
+arrays and `status`; port changes add `previous_ports` in the same shape.
+Exit events add `exit_code`, `stop_reason`, and, when known, `exit_signal`.
+The top-level ready event instead adds a name-sorted `processes` array of
+startup-service metadata, including a `ports` object when a port query succeeds.
+Unavailable process ports are omitted from that project snapshot.
+
+
 ## Environment Variables
 
 ### Variable Expansion

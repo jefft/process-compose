@@ -105,7 +105,7 @@ schema:
 	./bin/process-compose schema ./schemas/process-compose-schema.json
 
 lint: golangci-lint
-	./bin/golangci-lint run --show-stats -c .golangci.yaml
+	$(GOLANGCI_LINT) run --show-stats -c .golangci.yaml
 
 ## Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin
@@ -114,7 +114,10 @@ $(LOCALBIN):
 
 ## Tool Binaries
 SWAG2OP_GEN ?= $(LOCALBIN)/swag2op
-GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+# Keep in sync with the version in .github/workflows/go.yml.
+GOLANGCI_LINT_VERSION ?= v2.15.0
+GOLANGCI_LINT_DIR ?= $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+GOLANGCI_LINT ?= $(GOLANGCI_LINT_DIR)/golangci-lint
 
 .PHONY: swag2op
 swag2op: $(SWAG2OP_GEN) ## Download swag2op locally if necessary.
@@ -124,6 +127,6 @@ $(SWAG2OP_GEN): $(LOCALBIN)
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
-$(GOLANGCI_LINT): $(LOCALBIN)
-	test -s $(LOCALBIN)/golangci-lint || \
-	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3
+$(GOLANGCI_LINT): | $(LOCALBIN)
+	mkdir -p $(GOLANGCI_LINT_DIR)
+	GOBIN=$(GOLANGCI_LINT_DIR) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)

@@ -1151,14 +1151,17 @@ func (p *Process) onLivenessCheckEnd(_, isFatal bool, err string, details any) {
 func (p *Process) printDetails(details map[string]string, err, source string, debug bool) {
 	exitCode, _ := strconv.Atoi(details["exit_code"])
 	output := details["output"]
-	event := log.Warn()
 	if debug {
-		event = log.Debug()
+		log.Debug().
+			Str("error", err).
+			Int("exit_code", exitCode).
+			Msgf("%s %s probe failed", p.getName(), source)
+	} else {
+		log.Warn().
+			Str("error", err).
+			Int("exit_code", exitCode).
+			Msgf("%s %s probe failed", p.getName(), source)
 	}
-	event.
-		Str("error", err).
-		Int("exit_code", exitCode).
-		Msgf("%s %s probe failed", p.getName(), source)
 	if cmd := details["command"]; cmd != "" {
 		log.Debug().Msgf("%s %s probe command: %s", p.getName(), source, cmd)
 	}

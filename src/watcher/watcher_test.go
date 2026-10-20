@@ -81,6 +81,22 @@ func (m *mockController) waitForRestart(t *testing.T, timeout time.Duration) boo
 	}
 }
 
+// waitForBatchCount blocks until at least want batches have been recorded.
+// Unlike waitForRestart, it is not confused by notifications left over from
+// earlier batches.
+func (m *mockController) waitForBatchCount(want int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if m.batchCount() >= want {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // testOptions runs everything in milliseconds. This package has no clock
 // injection, so short real durations are the only lever.
 func testOptions() Options {
@@ -479,11 +495,8 @@ func TestWatcher_AdoptsNewDirectory(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	before := ctrl.batchCount()
 	writeFile(t, filepath.Join(newPkg, "later.go"), "package newpkg")
-	if !ctrl.waitForRestart(t, 5*time.Second) {
-		t.Fatal("new directory was adopted but not watched")
-	}
-	if ctrl.batchCount() <= before {
-		t.Error("no additional restart for a change inside the adopted directory")
+	if !ctrl.waitForBatchCount(before+1, 5*time.Second) {
+		t.Fatal("no additional restart for a change inside the adopted directory")
 	}
 }
 

@@ -984,6 +984,44 @@ const docTemplate = `{
                 }
             }
         },
+        "/project/hooks": {
+            "get": {
+                "description": "Returns lifecycle hook output recorded after the given sequence cursor, plus startup readiness accounting",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Project"
+                ],
+                "summary": "Get lifecycle hook output",
+                "operationId": "GetHookOutput",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Return lines with a sequence greater than this cursor",
+                        "name": "after",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/types.HookOutputSnapshot"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/project/name": {
             "get": {
                 "description": "Get process compose project name",
@@ -1261,6 +1299,46 @@ const docTemplate = `{
                 },
                 "timeoutSeconds": {
                     "type": "integer"
+                }
+            }
+        },
+        "types.HookOutputLine": {
+            "type": "object",
+            "properties": {
+                "event": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "process": {
+                    "type": "string"
+                },
+                "sequence": {
+                    "type": "integer"
+                }
+            }
+        },
+        "types.HookOutputSnapshot": {
+            "type": "object",
+            "properties": {
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/types.HookOutputLine"
+                    }
+                },
+                "next_sequence": {
+                    "type": "integer"
+                },
+                "pending": {
+                    "type": "integer"
+                },
+                "startup_complete": {
+                    "type": "boolean"
+                },
+                "truncated": {
+                    "type": "boolean"
                 }
             }
         },

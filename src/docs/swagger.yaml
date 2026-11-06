@@ -132,6 +132,32 @@ components:
                 timeoutSeconds:
                     type: integer
             type: object
+        types.HookOutputLine:
+            properties:
+                event:
+                    type: string
+                message:
+                    type: string
+                process:
+                    type: string
+                sequence:
+                    type: integer
+            type: object
+        types.HookOutputSnapshot:
+            properties:
+                lines:
+                    items:
+                        $ref: '#/components/schemas/types.HookOutputLine'
+                    type: array
+                next_sequence:
+                    type: integer
+                pending:
+                    type: integer
+                startup_complete:
+                    type: boolean
+                truncated:
+                    type: boolean
+            type: object
         types.LogRotationConfig:
             properties:
                 compress:
@@ -1343,6 +1369,34 @@ paths:
                                 type: object
                     description: Bad Request
             summary: Reload project
+            tags:
+                - Project
+    /project/hooks:
+        get:
+            description: Returns lifecycle hook output recorded after the given sequence cursor, plus startup readiness accounting
+            operationId: GetHookOutput
+            parameters:
+                - description: Return lines with a sequence greater than this cursor
+                  in: query
+                  name: after
+                  schema:
+                    type: integer
+            responses:
+                "200":
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/types.HookOutputSnapshot'
+                    description: OK
+                "400":
+                    content:
+                        application/json:
+                            schema:
+                                additionalProperties:
+                                    type: string
+                                type: object
+                    description: Bad Request
+            summary: Get lifecycle hook output
             tags:
                 - Project
     /project/name:

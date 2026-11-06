@@ -598,3 +598,32 @@ func (api *PcApi) GetDependencyGraph(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, graph)
 }
+
+// @Schemes
+// @Id              GetHookOutput
+// @Description     Returns lifecycle hook output recorded after the given sequence cursor, plus startup readiness accounting
+// @Tags            Project
+// @Summary         Get lifecycle hook output
+// @Produce         json
+// @Param           after   query   uint64  false  "Return lines with a sequence greater than this cursor"
+// @Success         200 {object} types.HookOutputSnapshot
+// @Failure         400 {object} map[string]string
+// @Router          /project/hooks [get]
+func (api *PcApi) GetHookOutput(c *gin.Context) {
+	query := c.Query("after")
+	after := uint64(0)
+	if query != "" {
+		parsed, err := strconv.ParseUint(query, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "after must be an unsigned integer"})
+			return
+		}
+		after = parsed
+	}
+	snapshot, err := api.project.GetHookOutput(after)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, snapshot)
+}

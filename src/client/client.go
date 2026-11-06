@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -244,6 +245,23 @@ func (p *PcClient) GetFullProcessEnvironment(proc *types.ProcessConfig) []string
 
 func (p *PcClient) GetDependencyGraph() (*types.DependencyGraph, error) {
 	return p.getDependencyGraph()
+}
+
+func (p *PcClient) GetHookOutput(after uint64) (*types.HookOutputSnapshot, error) {
+	url := fmt.Sprintf("http://%s/project/hooks?after=%d", p.address, after)
+	resp, err := p.client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseErrorResponse(resp, "get hook output")
+	}
+	var snapshot types.HookOutputSnapshot
+	if err = json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
 }
 
 func (p *PcClient) GetNamespaces() ([]string, error) {

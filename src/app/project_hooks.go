@@ -30,15 +30,27 @@ type projectReadyHook struct {
 }
 
 func newProjectReadyHook(p *ProjectRunner, runOrder []types.ProcessConfig, dir string) *projectReadyHook {
-	if p.project.OnReady == nil {
-		return nil
-	}
+	// The observer stays registered without a root hook: it publishes the
+	// project readiness signal the startup output API waits on. Environment
+	// and shell are only needed to execute a configured command.
 	h := &projectReadyHook{
 		wake:      make(chan struct{}, 1),
 		processes: make(map[string]types.ProcessConfig),
 		states:    make(map[string]types.ProcessState),
-		runner:    p, hook: p.project.OnReady.Clone(), shell: *p.project.ShellConfig,
+		runner:    p, hook: p.project.OnReady.Clone(),
 		name: p.project.Name, dir: dir,
+	}
+	if h.hook != nil {
+		shell := p.project.ShellConfig
+		if shell == nil {
+			shell = command.DefaultShellConfig()
+		}
+		h.shell = *shell
+		for key, value := range p.project.DotEnvVars {
+			h.env = append(h.env, key+"="+value)
+		}
+		h.env = append(h.env, os.Environ()...)
+		h.env = append(h.env, p.project.Environment...)
 	}
 	for _, proc := range runOrder {
 		if proc.IsDeferred() || (proc.Schedule != nil && proc.Schedule.IsScheduled()) {
@@ -46,11 +58,6 @@ func newProjectReadyHook(p *ProjectRunner, runOrder []types.ProcessConfig, dir s
 		}
 		h.processes[proc.ReplicaName] = proc
 	}
-	for key, value := range p.project.DotEnvVars {
-		h.env = append(h.env, key+"="+value)
-	}
-	h.env = append(h.env, os.Environ()...)
-	h.env = append(h.env, p.project.Environment...)
 	return h
 }
 
@@ -96,7 +103,7 @@ func projectProcessReady(proc types.ProcessConfig, state types.ProcessState) boo
 func (h *projectReadyHook) readySnapshot() ([]types.ProcessState, bool) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
-	if h.fired || len(h.processes) == 0 {
+	if h.fired {
 		return nil, false
 	}
 	for name, proc := range h.processes {
@@ -121,6 +128,16 @@ func (h *projectReadyHook) runIfReady() {
 	if !ready {
 		return
 	}
+	if len(states) == 0 || h.hook == nil {
+		h.runner.hookOutput.startupReady()
+		return
+	}
+	// Deferred calls run in reverse order: the project readiness signal is
+	// published only after the hook's output is fully journaled and its
+	// pending admission is released.
+	h.runner.hookOutput.admit()
+	defer h.runner.hookOutput.startupReady()
+	defer h.runner.hookOutput.complete()
 	slices.SortFunc(states, func(a, b types.ProcessState) int {
 		if a.Name < b.Name {
 			return -1
@@ -153,6 +170,7 @@ func (h *projectReadyHook) runIfReady() {
 	// consumes their state event. Their notification still gets its bounded
 	// execution window, independent of the application's cancellation.
 	executeHook(context.WithoutCancel(h.runner.ctxApp), h.hook, h.shell, h.env, h.dir, metadata, func(message string) {
+		h.runner.hookOutput.append("", "ready", message)
 		h.runner.logger.Info(message, "project", 0)
 		log.Info().Msg(message)
 	})

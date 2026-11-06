@@ -118,3 +118,9 @@ func withHookChain(link func(*processHookInstance) *processHookInstance) ProcOpt
 		p.linkHookInstance = link
 	}
 }
+
+func withHookOutput(journal *hookOutputJournal) ProcOpts {
+	return func(p *Process) {
+		p.hookOutput = journal
+	}
+}

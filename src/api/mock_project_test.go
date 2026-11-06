@@ -40,6 +40,7 @@ type mockProject struct {
 	getProcessPtyFn         func(string) *os.File
 	getFullProcessEnvFn     func(*types.ProcessConfig) []string
 	getDependencyGraphFn    func() (*types.DependencyGraph, error)
+	getHookOutputFn         func(uint64) (*types.HookOutputSnapshot, error)
 	sendSignalFn            func(string, int) error
 	sendProcessKeysFn       func(string, string) error
 }
@@ -273,6 +274,13 @@ func (m *mockProject) GetDependencyGraph() (*types.DependencyGraph, error) {
 		return m.getDependencyGraphFn()
 	}
 	return nil, nil
+}
+
+func (m *mockProject) GetHookOutput(after uint64) (*types.HookOutputSnapshot, error) {
+	if m.getHookOutputFn != nil {
+		return m.getHookOutputFn(after)
+	}
+	return &types.HookOutputSnapshot{Lines: []types.HookOutputLine{}}, nil
 }
 
 func (m *mockProject) RegisterStateObserver(_ types.StateObserver)   {}

@@ -76,6 +76,7 @@ func InitRoutes(useLogger bool, handler *PcApi) *gin.Engine {
 	r.POST("/project/configuration", handler.ReloadProject)
 	r.GET("/project/name", handler.GetProjectName)
 	r.GET("/project/state", handler.GetProjectState)
+	r.GET("/project/hooks", handler.GetHookOutput)
 	r.POST("/namespace/start/:name", handler.StartNamespace)
 	r.POST("/namespace/stop/:name", handler.StopNamespace)
 	r.POST("/namespace/restart/:name", handler.RestartNamespace)

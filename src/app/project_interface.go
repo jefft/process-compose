@@ -35,6 +35,7 @@ type IProject interface {
 	RestartProcess(name string) error
 	ScaleProcess(name string, scale int) error
 	GetProcessPorts(name string) (*types.ProcessPorts, error)
+	GetHookOutput(after uint64) (*types.HookOutputSnapshot, error)
 	SetProcessPassword(name string, password string) error
 	UpdateProject(project *types.Project) (map[string]string, error)
 	UpdateProcess(updated *types.ProcessConfig) error

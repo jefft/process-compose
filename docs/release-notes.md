@@ -1,5 +1,25 @@
 # Release Notes
 
+## Unreleased
+
+### New Features
+
+- Lifecycle hook output is now observable by API clients. The server records
+  hook stdout, stderr, and failure notices (never ordinary service output) in a
+  bounded journal (256 KiB / 1024 lines) exposed as
+  `GET /project/hooks?after=<sequence>` returning `lines`, `next_sequence`,
+  `pending`, `startup_complete`, and `truncated`; polling with the returned
+  `next_sequence` resumes without duplicates or history replay.
+  `startup_complete` reports when the selected startup services and the
+  top-level `on_ready` hook, if any, have finished. When a project is started
+  in the background, the client now forwards this output to the launching
+  terminal with `[process]` / `[project]` prefixes until startup completes,
+  within a bounded wait; output produced later remains in the logs and API.
+  Service lifecycle behavior is unchanged, and projects without hooks report
+  startup completion as soon as the readiness graph is satisfied.
+
+---
+
 ## [v1.122.0] - 2026-08-18
 
 ### New Features

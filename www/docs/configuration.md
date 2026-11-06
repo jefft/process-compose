@@ -89,6 +89,33 @@ the baseline of the last retained notification, rather than an intermediate
 poll that was never delivered. This keeps at most one pending port notification
 per instance; start, ready, and exit notifications are not discarded.
 
+### Hook output
+
+When a project is started in the background, the client polls the server and
+forwards hook output to the launching terminal until startup completes and all
+recorded hook commands have finished, within a bounded wait. Each forwarded
+line is prefixed with its process name, or `project` for the top-level hook.
+Only hook stdout, stderr, and failure notices are forwarded; ordinary service
+output keeps going to the service logs. Hook output produced after this
+startup window remains visible in the logs and through the API, but is not
+pushed to the terminal.
+
+The server retains this output in a bounded journal, available as
+`GET /project/hooks?after=<sequence>`. The response contains the retained
+`lines` (each with a `sequence`, the owning `process` name, the lifecycle
+`event`, and the message), `next_sequence` (the latest recorded sequence, also
+returned when `lines` is empty), `pending` (hook commands admitted but not yet
+finished), `startup_complete`, and `truncated`. Passing the previously
+returned `next_sequence` as `after` resumes without duplicates; output is
+bounded at 256 KiB and 1024 lines, and `truncated` reports that the requested
+cursor predates the retained range, so history older than that is gone.
+`startup_complete` becomes true once the selected startup services and their
+included dependencies satisfy startup readiness and the top-level `on_ready`
+hook, if configured, has finished. Pollers should wait for
+`startup_complete && pending == 0` to collect the initial hook output without
+missing hooks that are still running; the wait is bounded and a hook failure
+never blocks service startup.
+
 
 ### Runtime variables
 

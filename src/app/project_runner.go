@@ -93,6 +93,7 @@ type ProjectRunner struct {
 	admitters            []admitter.Admitter
 	hookChainsMutex      sync.Mutex
 	hookChains           map[string]*processHookInstance
+	hookOutput           hookOutputJournal
 }
 
 // RestartCall represents an in-flight restart operation
@@ -154,6 +155,7 @@ func (p *ProjectRunner) publishProcessState(ev types.ProcessStateEvent) {
 }
 
 func (p *ProjectRunner) Run() error {
+	p.hookOutput.reset()
 	p.runProcMutex.Lock()
 	p.runningProcesses = make(map[string]*Process)
 	p.runProcMutex.Unlock()
@@ -185,10 +187,8 @@ func (p *ProjectRunner) Run() error {
 	p.prepareEnvCmds()
 	projectDir := hookProjectDirectory()
 	readyHook := newProjectReadyHook(p, runOrder, projectDir)
-	if readyHook != nil {
-		p.RegisterStateObserver(readyHook)
-		defer p.UnregisterStateObserver(readyHook)
-	}
+	p.RegisterStateObserver(readyHook)
+	defer p.UnregisterStateObserver(readyHook)
 	//zerolog.SetGlobalLevel(zerolog.PanicLevel)
 	log.Debug().Msgf("Spinning up %d processes. Order: %q", len(runOrder), nameOrder)
 
@@ -222,6 +222,7 @@ func (p *ProjectRunner) Run() error {
 	// still in flight, leaving two incarnations.
 	p.startWatcher()
 	defer p.stopWatcher()
+	readyHook.runIfReady()
 
 	for {
 		select {
@@ -312,6 +313,7 @@ func (p *ProjectRunner) runProcess(config *types.ProcessConfig) {
 		withShellConfig(*p.project.ShellConfig),
 		withHookProject(p.project.Name, hookProjectDirectory()),
 		withHookChain(p.linkServiceHookInstance),
+		withHookOutput(&p.hookOutput),
 		withPrintLogs(printLogs),
 		withIsMain(isMain),
 		withExtraArgs(extraArgs),

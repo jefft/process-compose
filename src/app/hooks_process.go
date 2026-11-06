@@ -36,6 +36,7 @@ type processHookInstance struct {
 	env             []string
 	dir             string
 	output          func(string)
+	journal         *hookOutputJournal
 	onStart         *types.HookConfig
 	onReady         *types.HookConfig
 	onExit          *types.HookConfig
@@ -55,6 +56,7 @@ func (p *Process) newHookInstance(previous *processHookInstance) *processHookIns
 		projectName: p.hookProjectName, projectDir: p.hookProjectDir,
 		shell: p.shellConfig, dir: p.procConf.WorkingDir,
 		output: p.handleInfo, tree: p.processTree,
+		journal: p.hookOutput,
 		onStart: p.procConf.OnStart, onReady: p.procConf.OnReady,
 		onExit: p.procConf.OnExit, onPortsChanged: p.procConf.OnPortsChanged,
 	}
@@ -98,6 +100,7 @@ func (i *processHookInstance) enqueue(hook *types.HookConfig, metadata map[strin
 				copy(i.queue[index:], i.queue[index+1:])
 				i.queue[len(i.queue)-1] = processHookEvent{}
 				i.queue = i.queue[:len(i.queue)-1]
+				i.journal.complete()
 			} else {
 				// The newest observation follows any readiness notification
 				// that arrived since the replaced port observation.
@@ -108,6 +111,7 @@ func (i *processHookInstance) enqueue(hook *types.HookConfig, metadata map[strin
 		}
 	}
 	i.queue = append(i.queue, processHookEvent{hook: hook, metadata: metadata})
+	i.journal.admit()
 	select {
 	case i.wake <- struct{}{}:
 	default:
@@ -134,7 +138,14 @@ func (i *processHookInstance) run(previous *processHookInstance) {
 		i.queue[0] = processHookEvent{}
 		i.queue = i.queue[1:]
 		i.mu.Unlock()
-		executeHook(context.Background(), event.hook, i.shell, i.env, i.dir, event.metadata, i.output)
+		eventName, _ := event.metadata["event"].(string)
+		executeHook(context.Background(), event.hook, i.shell, i.env, i.dir, event.metadata, func(message string) {
+			i.journal.append(i.name, eventName, message)
+			if i.output != nil {
+				i.output(message)
+			}
+		})
+		i.journal.complete()
 	}
 }
 

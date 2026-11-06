@@ -67,6 +67,7 @@ type Process struct {
 	hookProjectName      string
 	hookProjectDir       string
 	linkHookInstance     func(*processHookInstance) *processHookInstance
+	hookOutput           *hookOutputJournal
 	probesMtx            sync.Mutex
 	procColor            func(a ...any) string
 	noColor              func(a ...any) string
@@ -196,9 +197,6 @@ loop:
 			Strs("command", p.getCommand()).
 			Msg("Started")
 
-		if !p.hasReadinessProbe() && p.procConf.ReadyLogLine == "" {
-			instance.markReady()
-		}
 		p.startProbes()
 
 		p.waitForStdOutErr()
@@ -345,6 +343,10 @@ func (p *Process) getProcessStarter() func() error {
 				p.procState.ProcessReadyTime = &readyCopy
 			}
 			instance.start(p.command.Pid())
+			// Admit immediate ready notifications before publishing running.
+			if !p.hasReadinessProbe() && p.procConf.ReadyLogLine == "" {
+				instance.markReady()
+			}
 		}
 		return err
 	}
@@ -958,7 +960,9 @@ func (p *Process) handleOutput(pipe io.ReadCloser, output string, handler func(m
 			break
 		}
 		p.withInstanceCallback(instance, func() {
+			// Queue the notification before readiness is visible to observers.
 			if p.procConf.ReadyLogLine != "" && strings.Contains(line, p.procConf.ReadyLogLine) {
+				instance.markReady()
 				p.stateMtx.Lock()
 				firstReady := p.procState.ProcessReadyTime == nil
 				p.stateMtx.Unlock()
@@ -966,7 +970,6 @@ func (p *Process) handleOutput(pipe io.ReadCloser, output string, handler func(m
 					p.setProcHealth(types.ProcessHealthReady)
 				}
 				p.cancelReadyLogFunc(nil)
-				instance.markReady()
 			}
 			p.checkElevatedProcOutput(line)
 		})
@@ -1155,10 +1158,10 @@ func (p *Process) setUpProbes(instance *processHookInstance) {
 			p.shellConfig,
 			func(ok, fatal bool, message string, details any) {
 				p.withInstanceCallback(instance, func() {
-					p.onReadinessCheckEnd(ok, fatal, message, details)
 					if ok {
 						instance.markReady()
 					}
+					p.onReadinessCheckEnd(ok, fatal, message, details)
 				})
 			},
 		)
